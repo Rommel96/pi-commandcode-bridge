@@ -105,6 +105,15 @@ cmd -p --output-format json --skip-onboarding --trust \
   so only `onPayload` and `onProviderStreamEvent` are honored.
 - Prompts, keys and provider payloads are never logged to disk.
 
+## Skill
+
+The package ships [`skills/commandcode-low-cost/SKILL.md`](skills/commandcode-low-cost/SKILL.md),
+installed together with the provider (`/skill:commandcode-low-cost`). It tells an
+agent when to apply the `commandcode` bridge (the `low-cost` Gentle AI profile and
+`commandcode/<id>:<level>` refs), the model/effort table and role routing, the
+limits (`cmd` uses its own tools, `CMDCODE_BRIDGE_YOLO=1`, ~16.6k tokens per run,
+MiMo has no effort), troubleshooting checks, and ad-hoc `cmd-agent` delegation.
+
 ## Development
 
 ```bash
