@@ -1,0 +1,21 @@
+{
+  "name": "pi-commandcode-bridge",
+  "version": "0.1.0",
+  "description": "Pi provider `commandcode` backed by the Command Code CLI (cmd -p).",
+  "type": "module",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}
