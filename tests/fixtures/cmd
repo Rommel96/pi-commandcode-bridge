@@ -15,8 +15,7 @@
 //       "exitCode": 0,           // process exit code (default 0)
 //       "ignoreSigterm": false   // swallow SIGTERM (forces SIGKILL escalation)
 //     }
-"use strict";
-const fs = require("node:fs");
+import fs from "node:fs";
 
 const argv = process.argv.slice(2);
 const recordPath = process.env.CMD_STUB_RECORD;
