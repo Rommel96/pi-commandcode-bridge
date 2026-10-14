@@ -2,7 +2,7 @@
 // Test stub for the Command Code CLI (`cmd`). Never calls a model.
 //
 // Env contract:
-//   CMD_STUB_RECORD   path of a JSON file receiving { argv, env, pid, cwd }
+//   CMD_STUB_RECORD   path of a JSON file receiving { argv, env, pid, cwd, stdin }
 //   CMD_STUB_SCENARIO path of a JSON scenario:
 //     {
 //       "script": [
@@ -21,10 +21,18 @@ const argv = process.argv.slice(2);
 const recordPath = process.env.CMD_STUB_RECORD;
 const scenarioPath = process.env.CMD_STUB_SCENARIO;
 
+const stdinChunks = [];
+for await (const chunk of process.stdin) stdinChunks.push(chunk);
+const stdinText = Buffer.concat(stdinChunks).toString("utf8");
+
 if (recordPath) {
   fs.writeFileSync(
     recordPath,
-    JSON.stringify({ argv, env: process.env, pid: process.pid, cwd: process.cwd() }, null, 2),
+    JSON.stringify(
+      { argv, env: process.env, pid: process.pid, cwd: process.cwd(), stdin: stdinText },
+      null,
+      2,
+    ),
   );
 }
 

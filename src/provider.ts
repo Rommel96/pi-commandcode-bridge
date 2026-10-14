@@ -17,9 +17,9 @@ import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
 
 /** The provider request payload passed to `options.onPayload` (spec R6). */
 export interface CmdPayload {
-	/** Full child argv, including the prompt. */
+	/** Full child argv; the prompt is not part of it (F2: it travels on stdin). */
 	argv: string[];
-	/** The prompt sent to `cmd`. */
+	/** The prompt sent to `cmd` on stdin. */
 	prompt: string;
 }
 
@@ -91,7 +91,6 @@ async function runCmdTurn(
 
 	const argv = [
 		"-p",
-		prompt,
 		"--output-format",
 		"json",
 		"--skip-onboarding",
@@ -120,11 +119,23 @@ async function runCmdTurn(
 		return;
 	}
 
-	const child = spawn(bin, payload.argv, {
-		cwd: process.cwd(),
-		env,
-		stdio: ["ignore", "pipe", "pipe"],
+	let child;
+	try {
+		child = spawn(bin, payload.argv, {
+			cwd: process.cwd(),
+			env,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+	} catch (error) {
+		finalize("error", `cannot start cmd: ${(error as Error).message}`);
+		return;
+	}
+	// The prompt travels on stdin (F2): argv space is far too small for a
+	// system prompt plus transcript.
+	child.stdin?.on("error", () => {
+		/* child may exit before consuming the prompt */
 	});
+	child.stdin?.end(payload.prompt);
 
 	let stderrTail = "";
 	child.stderr?.setEncoding("utf8");
@@ -135,6 +146,7 @@ async function runCmdTurn(
 	let lineBuffer = "";
 	let processing: Promise<void> = Promise.resolve();
 	let resultLine: Record<string, any> | null = null;
+	let lastRequestUsage: Record<string, unknown> | undefined;
 	let runSessionId: string | undefined;
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
@@ -171,6 +183,13 @@ async function runCmdTurn(
 			switch (event.type) {
 				case "run_start":
 					runSessionId = event.sessionId ?? runSessionId;
+					break;
+				case "model_request_end":
+					// result.usage is the SUM over every internal request of the
+					// run; only the last request reflects the context size (F1).
+					if (event.usage && typeof event.usage === "object") {
+						lastRequestUsage = event.usage;
+					}
 					break;
 				case "text_delta":
 					appendText(stream, blocks, String(event.delta ?? ""));
@@ -229,11 +248,16 @@ async function runCmdTurn(
 			if (ok) {
 				const sessionId = resultLine.sessionId ?? runSessionId;
 				if (sessionId) bindings.set(key, { cmdSessionId: sessionId });
+				// F3: a run that emitted only thinking must still surface
+				// finalText as text before done.
 				const finalText = typeof resultLine.finalText === "string" ? resultLine.finalText : "";
-				if (blocks.textIdx === null && blocks.thinkingIdx === null && finalText) {
+				const hasText = blocks.partial.content.some(
+					(b) => b.type === "text" && b.text.length > 0,
+				);
+				if (!hasText && finalText) {
 					appendText(stream, blocks, finalText);
 				}
-				blocks.partial.usage = toPiUsage(resultLine.usage);
+				blocks.partial.usage = toPiUsage(lastRequestUsage ?? resultLine.usage);
 				finalize("stop");
 				return;
 			}
@@ -298,11 +322,16 @@ function formatToolDetail(input: unknown): string {
 	return JSON.stringify(input ?? {});
 }
 
+/**
+ * Map `cmd` usage to Pi usage. `cmd`'s inputTokens already includes cache
+ * reads, so Pi input excludes them (F1); totalTokens counts every token once.
+ */
 function toPiUsage(usage: Record<string, unknown> | undefined): Usage {
-	const input = Number(usage?.inputTokens ?? 0) || 0;
+	const inputTokens = Number(usage?.inputTokens ?? 0) || 0;
 	const output = Number(usage?.outputTokens ?? 0) || 0;
 	const cacheRead = Number(usage?.cacheReadTokens ?? 0) || 0;
 	const cacheWrite = Number(usage?.cacheWriteTokens ?? 0) || 0;
+	const input = Math.max(0, inputTokens - cacheRead);
 	return {
 		input,
 		output,

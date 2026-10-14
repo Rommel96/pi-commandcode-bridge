@@ -21,7 +21,7 @@ function okScenario(sessionId: string) {
 	};
 }
 
-test("argv: -p prompt, --output-format json, --skip-onboarding, --trust, -m <id>, no --yolo by default", async () => {
+test("argv: -p without a prompt value, --output-format json, --skip-onboarding, --trust, -m <id>, no --yolo by default", async () => {
 	const sb = sandbox();
 	setScenario(sb, okScenario("S1"));
 	await runTurn(testModel(MODEL_ID), "SYSTEM PROMPT TEXT", [userMsg("hello world")], {
@@ -29,8 +29,7 @@ test("argv: -p prompt, --output-format json, --skip-onboarding, --trust, -m <id>
 		sessionId: "argv-1",
 	});
 	const rec = await waitForRecord(sb);
-	expect(rec.argv).toContain("-p");
-	expect(rec.argv).toContain("--output-format");
+	expect(rec.argv.slice(0, 2)).toEqual(["-p", "--output-format"]);
 	expect(flagValue(rec.argv, "--output-format")).toBe("json");
 	expect(rec.argv).toContain("--skip-onboarding");
 	expect(rec.argv).toContain("--trust");
@@ -38,7 +37,8 @@ test("argv: -p prompt, --output-format json, --skip-onboarding, --trust, -m <id>
 	expect(flagValue(rec.argv, "-m")).toBe(MODEL_ID);
 	expect(rec.argv).not.toContain("--yolo");
 	expect(rec.argv).not.toContain("--resume");
-	const prompt = flagValue(rec.argv, "-p") ?? "";
+	expect(rec.argv.join(" ")).not.toContain("hello world");
+	const prompt = rec.stdin;
 	expect(prompt).toContain("hello world");
 	expect(prompt).toContain("SYSTEM PROMPT TEXT");
 });
@@ -87,17 +87,27 @@ test("onPayload receives the argv and prompt; a replacement payload is used", as
 		sessionId: "argv-5",
 		onPayload: (payload) => {
 			seen = payload as { argv: string[]; prompt: string };
-			const i = seen.argv.indexOf("-p");
-			return {
-				argv: [...seen.argv.slice(0, i + 1), "REPLACED PROMPT", ...seen.argv.slice(i + 2)],
-				prompt: "REPLACED PROMPT",
-			};
+			return { argv: seen.argv, prompt: "REPLACED PROMPT" };
 		},
 	});
 	expect(seen).toBeDefined();
 	expect(seen!.prompt).toContain("payload question");
 	expect(seen!.argv).toContain("-p");
 	expect(seen!.argv).toContain("--trust");
+	expect(seen!.argv.join(" ")).not.toContain("payload question");
 	const rec = await waitForRecord(sb);
-	expect(flagValue(rec.argv, "-p")).toBe("REPLACED PROMPT");
+	expect(rec.stdin).toBe("REPLACED PROMPT");
 });
+
+test("a prompt larger than 2 MB reaches the stub intact through stdin (F2)", async () => {
+	const sb = sandbox();
+	setScenario(sb, okScenario("S6"));
+	const big = `BEGIN ${"x".repeat(2 * 1024 * 1024)} END`;
+	await runTurn(testModel(MODEL_ID), "SYSTEM PROMPT TEXT", [userMsg(big)], {
+		env: stubEnv(sb),
+		sessionId: "argv-6",
+	});
+	const rec = await waitForRecord(sb);
+	expect(rec.stdin.length).toBeGreaterThan(2 * 1024 * 1024);
+	expect(rec.stdin).toContain(big);
+}, 30_000);

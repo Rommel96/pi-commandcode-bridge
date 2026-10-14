@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 import {
 	assistantMsg,
 	flagValue,
-	recordedPrompt,
 	resultLine,
 	runStart,
 	runTurn,
@@ -30,7 +29,7 @@ test("first request sends the system prompt, the prior transcript and the latest
 	);
 	const rec = await waitForRecord(sb);
 	expect(rec.argv).not.toContain("--resume");
-	const prompt = recordedPrompt(rec.argv);
+	const prompt = rec.stdin;
 	expect(prompt).toContain("SYSTEM PROMPT TEXT");
 	expect(prompt).toContain("turn zero question");
 	expect(prompt).toContain("turn zero answer");
@@ -64,7 +63,7 @@ test("second request in the same conversation passes --resume <sid> and only the
 	const rec = await waitForRecord(sb);
 	expect(rec.argv).toContain("--resume");
 	expect(flagValue(rec.argv, "--resume")).toBe("cmd-42");
-	const prompt = recordedPrompt(rec.argv);
+	const prompt = rec.stdin;
 	expect(prompt).toContain("second question");
 	expect(prompt).toContain("TOOL RESULT TEXT");
 	expect(prompt).not.toContain("first question");

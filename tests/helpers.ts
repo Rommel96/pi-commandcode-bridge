@@ -22,6 +22,7 @@ export interface StubRecord {
 	env: Record<string, string>;
 	pid: number;
 	cwd: string;
+	stdin: string;
 }
 
 export interface Sandbox {
@@ -225,11 +226,8 @@ export function resultLine(
 	};
 }
 
-/** The prompt string passed via `-p`, from a recorded argv. */
-export function recordedPrompt(argv: string[]): string {
-	const i = argv.indexOf("-p");
-	if (i < 0) throw new Error(`no -p in argv: ${JSON.stringify(argv)}`);
-	return argv[i + 1] ?? "";
+export function modelRequestEnd(model: string, usage: StubUsage): Record<string, unknown> {
+	return { type: "event", event: { type: "model_request_end", model, usage } };
 }
 
 /** The value following a flag in argv, e.g. flagValue(argv, "--effort"). */

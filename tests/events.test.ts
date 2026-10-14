@@ -150,3 +150,33 @@ test("Unicode deltas split across chunks are preserved (item 10)", async () => {
 		.join("");
 	expect(fullText).toBe(text);
 });
+
+test("finalText becomes text when the run emitted only thinking (F3)", async () => {
+	const sb = sandbox();
+	setScenario(sb, {
+		script: [
+			{ emit: runStart("S4") },
+			{ emit: toolQueued("write_file", { path: "/path" }) },
+			{ emit: resultLine("S4", "FINAL TEXT") },
+		],
+	});
+	const events = await runTurn(testModel(MODEL_ID), "S", [userMsg("q")], {
+		env: stubEnv(sb),
+		sessionId: "ev-4",
+	});
+
+	const last = events[events.length - 1]!;
+	if (last.type !== "done") throw new Error(`expected done, got ${last.type}`);
+	const text = last.message.content
+		.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+		.map((b) => b.text)
+		.join("");
+	expect(text).toBe("FINAL TEXT");
+	const thinking = last.message.content
+		.filter((b): b is Extract<typeof b, { type: "thinking" }> => b.type === "thinking")
+		.map((b) => b.thinking)
+		.join("");
+	expect(thinking).toContain("[cmd tool: write_file /path]");
+	expect(count(events, "text_start")).toBeGreaterThan(0);
+	expect(count(events, "text_start")).toBe(count(events, "text_end"));
+});

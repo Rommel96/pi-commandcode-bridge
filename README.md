@@ -59,12 +59,15 @@ pi --extension /Users/dev/dev/utils/pi-commandcode-bridge --list-models commandc
 One Pi request = one `cmd` run:
 
 ```text
-cmd -p <prompt> --output-format json --skip-onboarding --trust \
+cmd -p --output-format json --skip-onboarding --trust \
     -m <model-id> [--effort E] [--resume SID] [--yolo]
 ```
 
-- cwd is the Pi process working directory; stdin is ignored; the child
-  environment is inherited (plus `CMD_HERDR=0`).
+- The prompt is written to `cmd`'s stdin (never in argv, which would overflow
+  the OS argument limit on large prompts); `cmd -p` with no query reads it
+  from there.
+- cwd is the Pi process working directory; the child environment is
+  inherited (plus `CMD_HERDR=0`).
 - Each Pi conversation is bound to one `cmd` session (kept in memory for the
   lifetime of the Pi process). The first run sends the Pi system prompt, a
   plain-text transcript of prior messages and the latest user message; later
@@ -73,7 +76,10 @@ cmd -p <prompt> --output-format json --skip-onboarding --trust \
 - `text_delta` events stream as text; `tool_queued`/`tool_hook_blocked`
   events appear as thinking text such as `[cmd tool: write_file /path]` and
   `[cmd blocked: write_file: <reason>]`.
-- Token usage is mapped from the `result` line (cost stays 0).
+- Token usage comes from the last `model_request_end` event (the per-request
+  usage; `result.usage` sums every internal request of the run and would
+  dwarf the context window). Pi input excludes cache reads because `cmd`'s
+  `inputTokens` already includes them. Cost stays 0.
 
 ## Limits and caveats
 
