@@ -10,6 +10,10 @@ export interface CmdModelSpec {
 	name: string;
 	/** Supported `cmd --effort` values; empty means `--effort` must never be passed. */
 	efforts: readonly CmdEffort[];
+	/** Context window when the catalog states one; the 1M default applies otherwise. */
+	contextWindow?: number;
+	/** One-line description from `cmd --list-models`, informational only. */
+	description?: string;
 }
 
 /** Custom API id: no built-in provider claims it, so it can never collide. */
@@ -20,8 +24,12 @@ export const BASE_URL = "commandcode-cli://commandcode";
 export const CONTEXT_WINDOW = 1_000_000;
 export const MAX_TOKENS = 65_536;
 
-/** Static table of supported Command Code models (spec R2). */
-export const CMD_MODELS: readonly CmdModelSpec[] = [
+/**
+ * Built-in table of models whose effort levels were verified by hand. It is the
+ * fallback when `cmd --list-models` is unavailable and the source of effort
+ * levels when a probe is inconclusive.
+ */
+export const FALLBACK_MODELS: readonly CmdModelSpec[] = [
 	{
 		id: "deepseek/deepseek-v4.1-flash",
 		name: "deepseek/deepseek-v4.1-flash",
@@ -43,6 +51,18 @@ export const CMD_MODELS: readonly CmdModelSpec[] = [
 		efforts: ["low", "high", "max"],
 	},
 ];
+
+let activeSpecs: readonly CmdModelSpec[] | undefined;
+
+/** Install the models registered with Pi so the provider can look up their efforts. */
+export function setActiveSpecs(specs: readonly CmdModelSpec[] | undefined): void {
+	activeSpecs = specs;
+}
+
+/** The spec of a model id: the registered catalog, or the built-in table before registration. */
+export function specFor(id: string): CmdModelSpec | undefined {
+	return (activeSpecs ?? FALLBACK_MODELS).find((m) => m.id === id);
+}
 
 /** Pi thinking levels in ascending order; cmd efforts use the same vocabulary. */
 const LEVEL_ORDER: readonly ModelThinkingLevel[] = [
@@ -110,12 +130,12 @@ export function toPiModel(spec: CmdModelSpec): Model<Api> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		reasoning: spec.efforts.length > 0,
 		...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-		contextWindow: CONTEXT_WINDOW,
+		contextWindow: spec.contextWindow ?? CONTEXT_WINDOW,
 		maxTokens: MAX_TOKENS,
 	};
 }
 
-/** Project the whole static table to Pi models. */
-export function toPiModels(): Model<Api>[] {
-	return CMD_MODELS.map(toPiModel);
+/** Project model specs (default: the built-in table) to Pi models. */
+export function toPiModels(specs: readonly CmdModelSpec[] = FALLBACK_MODELS): Model<Api>[] {
+	return specs.map(toPiModel);
 }

@@ -12,7 +12,7 @@ import {
 	type TranscriptContext,
 	type Usage,
 } from "@earendil-works/pi-ai";
-import { CMD_MODELS, toCmdEffort } from "./models.js";
+import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
 
 /** The provider request payload passed to `options.onPayload` (spec R6). */
@@ -79,7 +79,7 @@ async function runCmdTurn(
 
 	const key = conversationKey(context, options);
 	const bound = bindings.get(key);
-	const spec = CMD_MODELS.find((m) => m.id === model.id);
+	const spec = specFor(model.id);
 	const effort = toCmdEffort(options?.reasoning, spec?.efforts ?? []);
 	const prompt = bound
 		? buildDeltaPrompt(context.messages)

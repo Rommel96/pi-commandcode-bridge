@@ -63,7 +63,9 @@ describe("parseModelList", () => {
 	test("reads every `id  description` line of the real cmd output and nothing else", () => {
 		const entries = parseModelList(REAL_LIST);
 		const ids = entries.map((e) => e.id);
-		expect(entries.length).toBe(88);
+		const announced = Number(/(\d+) models/.exec(REAL_LIST)![1]); // cmd states its own count
+		expect(entries.length).toBe(announced);
+		expect(ids).toContain("stealth/glyph-cluster:free"); // ids can carry a `:free` suffix
 		expect(new Set(ids).size).toBe(ids.length);
 		expect(ids).toContain("z-ai/glm-5.3-flash");
 		expect(ids).toContain("gpt-6-luna"); // ids without a vendor prefix exist
