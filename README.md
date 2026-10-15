@@ -53,8 +53,9 @@ does not.
 ## Install
 
 ```bash
-pi install npm:pi-commandcode-bridge      # once published
-pi install /path/to/pi-commandcode-bridge # from a checkout
+pi install git:github.com/Rommel96/pi-commandcode-bridge # straight from GitHub, no clone needed
+pi install npm:pi-commandcode-bridge                     # once published
+pi install /path/to/pi-commandcode-bridge                # from a checkout
 ```
 
 Do not also define a `commandcode` provider in `~/.pi/agent/models.json`: it
