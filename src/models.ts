@@ -37,6 +37,11 @@ export const CMD_MODELS: readonly CmdModelSpec[] = [
 		name: "gpt-6-luna",
 		efforts: ["low", "medium", "high", "xhigh", "max"],
 	},
+	{
+		id: "z-ai/glm-5.3-flash",
+		name: "z-ai/glm-5.3-flash",
+		efforts: ["low", "high", "max"],
+	},
 ];
 
 /** Pi thinking levels in ascending order; cmd efforts use the same vocabulary. */

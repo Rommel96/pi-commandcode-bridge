@@ -15,7 +15,19 @@ import {
 
 const DEEPSEEK = ["off", "low", "high", "max"] as const;
 const LUNA = ["low", "medium", "high", "xhigh", "max"] as const;
+const GLM_FLASH = ["low", "high", "max"] as const;
 const MIMO = [] as const;
+
+test("effort clamping for GLM-5.3 Flash (low, high, max)", () => {
+	expect(toCmdEffort("off", GLM_FLASH)).toBe("low");
+	expect(toCmdEffort("minimal", GLM_FLASH)).toBe("low");
+	expect(toCmdEffort("low", GLM_FLASH)).toBe("low");
+	expect(toCmdEffort("medium", GLM_FLASH)).toBe("high");
+	expect(toCmdEffort("high", GLM_FLASH)).toBe("high");
+	expect(toCmdEffort("xhigh", GLM_FLASH)).toBe("max");
+	expect(toCmdEffort("max", GLM_FLASH)).toBe("max");
+	expect(toCmdEffort(undefined, GLM_FLASH)).toBeUndefined();
+});
 
 test("effort clamping for DeepSeek (off, low, high, max)", () => {
 	expect(toCmdEffort("off", DEEPSEEK)).toBe("off");
@@ -69,6 +81,11 @@ test("argv: DeepSeek reasoning xhigh sends --effort max", async () => {
 test("argv: Luna reasoning medium sends --effort medium", async () => {
 	const argv = await effortArgv("gpt-6-luna", "medium");
 	expect(flagValue(argv, "--effort")).toBe("medium");
+});
+
+test("argv: GLM-5.3 Flash reasoning xhigh sends --effort max (cmd rejects xhigh)", async () => {
+	const argv = await effortArgv("z-ai/glm-5.3-flash", "xhigh");
+	expect(flagValue(argv, "--effort")).toBe("max");
 });
 
 test("argv: MiMo never gets --effort, even when a level is requested", async () => {

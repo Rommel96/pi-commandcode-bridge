@@ -37,6 +37,7 @@ pi --extension /Users/dev/dev/utils/pi-commandcode-bridge --list-models commandc
 | `deepseek/deepseek-v4.1-flash` | `off`, `low`, `high`, `max` | yes |
 | `xiaomi/mimo-v2.6-pro` | none | no |
 | `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max` | yes |
+| `z-ai/glm-5.3-flash` | `low`, `high`, `max` | yes |
 
 - Context window 1,000,000 tokens; cost is always 0 (the plan pays).
 - Pi thinking levels that a model does not support are hidden in the toggle,
@@ -104,15 +105,6 @@ cmd -p --output-format json --skip-onboarding --trust \
   `onResponse` hook for HTTP responses; a child process has no HTTP response,
   so only `onPayload` and `onProviderStreamEvent` are honored.
 - Prompts, keys and provider payloads are never logged to disk.
-
-## Skill
-
-The package ships [`skills/commandcode-low-cost/SKILL.md`](skills/commandcode-low-cost/SKILL.md),
-installed together with the provider (`/skill:commandcode-low-cost`). It tells an
-agent when to apply the `commandcode` bridge (the `low-cost` Gentle AI profile and
-`commandcode/<id>:<level>` refs), the model/effort table and role routing, the
-limits (`cmd` uses its own tools, `CMDCODE_BRIDGE_YOLO=1`, ~16.6k tokens per run,
-MiMo has no effort), troubleshooting checks, and ad-hoc `cmd-agent` delegation.
 
 ## Development
 
