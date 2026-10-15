@@ -1,9 +1,25 @@
 {
   "name": "pi-commandcode-bridge",
   "version": "0.1.0",
-  "description": "Pi provider `commandcode` backed by the Command Code CLI (cmd -p).",
+  "description": "Pi provider that runs Command Code models through the cmd CLI (works without API access), with the model list and reasoning efforts discovered from cmd.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-provider",
+    "commandcode",
+    "command-code",
+    "cmd"
+  ],
   "type": "module",
   "private": true,
+  "files": [
+    "extensions",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test"
+  },
   "pi": {
     "extensions": [
       "./extensions"

@@ -1,110 +1,121 @@
 # pi-commandcode-bridge
 
-A [Pi](https://pi.dev) model provider that runs every request through the
-Command Code CLI (`cmd -p`). Use models like
-`commandcode/deepseek/deepseek-v4.1-flash:max` in Pi, including in subagents
-(`pi --model commandcode/<model-id>:<thinking> ...`).
+A [Pi](https://pi.dev) provider that runs [Command Code](https://commandcode.ai)
+models through the **`cmd` CLI** instead of the HTTP Provider API.
 
-The Command Code plan blocks the HTTP Provider API, so the CLI is the only
-allowed path: one Pi request spawns one `cmd -p` run and streams its NDJSON
-back into Pi.
+Pick it when your Command Code plan can run the CLI but has no API access (the Go
+plan, for example). If you have API access, the API-based providers are simpler.
+
+- Every request is one `cmd -p` run; later turns resume the same `cmd` session.
+- The model list and each model's supported reasoning efforts are **discovered from
+  `cmd` itself** and cached, so new models appear without a package update.
+- Pi's thinking levels map onto the efforts each model accepts (`xhigh` on a model
+  that stops at `max` becomes `max`; models without adjustable effort never get
+  `--effort`).
+
+## Requirements
+
+- Pi with extension support.
+- The Command Code CLI installed and signed in (`cmd login`; `cmdc` on Windows).
+- Node 20+ (the extension uses only Node APIs).
 
 ## Install
 
-From a local checkout:
-
 ```bash
-pi install ./pi-commandcode-bridge
+pi install npm:pi-commandcode-bridge      # once published
+pi install /path/to/pi-commandcode-bridge # from a checkout
 ```
 
-Or try it for one invocation:
+Do not also define a `commandcode` provider in `~/.pi/agent/models.json`: it
+conflicts with this extension.
+
+## Use
 
 ```bash
-pi --extension /Users/dev/dev/utils/pi-commandcode-bridge
+pi --list-models commandcode
+pi --model commandcode/z-ai/glm-5.3-flash:high -p "Summarize this repository"
 ```
 
-Register the package in `~/.pi/agent/settings.json` (or `.pi/settings.json`
-with `pi install --local`) for permanent use. Verify registration with:
+Model ids keep their slashes, so the full reference is
+`commandcode/<vendor>/<model>[:<thinking>]`. In Gentle AI profiles use the same
+reference, for example `commandcode/xiaomi/mimo-v2.6-pro`.
 
-```bash
-pi --extension /Users/dev/dev/utils/pi-commandcode-bridge --list-models commandcode
-```
+## Model discovery
 
-## Models
+1. `cmd --list-models` provides the ids (a context window is read when the
+   description states one, such as "1M context"; otherwise 1M applies).
+2. For each model, `cmd -p hi -m <id> --effort bogus` is run once. `cmd` rejects the
+   value before reaching the model and names the supported levels
+   (`Supported: low, high, max.`), or says the model has no adjustable effort. No
+   model is called and nothing is billed.
+3. The result is cached (24 h) in
+   `~/.pi/agent/commandcode-bridge/models-cache.json` (or under `PI_CODING_AGENT_DIR`).
 
-| Model id | `cmd --effort` levels | Thinking |
-|---|---|---|
-| `deepseek/deepseek-v4.1-flash` | `off`, `low`, `high`, `max` | yes |
-| `xiaomi/mimo-v2.6-pro` | none | no |
-| `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max` | yes |
-| `z-ai/glm-5.3-flash` | `low`, `high`, `max` | yes |
+| Situation | Behavior |
+| --- | --- |
+| No cache | Discovery runs once at startup (about 15 s for ~90 models), then the cache is used |
+| Fresh cache | No `cmd` call |
+| Stale cache | The cached list is used immediately and a background refresh updates the cache for the next start |
+| `cmd` unavailable | A small built-in table is registered |
 
-- Context window 1,000,000 tokens; cost is always 0 (the plan pays).
-- Pi thinking levels that a model does not support are hidden in the toggle,
-  but a requested hidden level is still clamped to the nearest supported
-  effort (ties round up: `medium` on DeepSeek sends `--effort high`,
-  `minimal` sends `--effort low`, `xhigh` sends `--effort max`).
-- `--effort` is omitted entirely for `xiaomi/mimo-v2.6-pro` and when no
-  thinking level was requested.
+The background refresh only completes while the host process stays alive, as in an
+interactive session. A short one-shot run exits without waiting for it; use
+`CMDCODE_BRIDGE_REFRESH=1` for scripts. The list is read when the extension loads,
+so new models appear on the next start.
 
-## Environment variables
+## Configuration
 
-| Variable | Effect |
-|---|---|
-| `CMDCODE_BRIDGE_BIN` | `cmd` binary to spawn (default: `cmd` on `PATH`) |
-| `CMDCODE_BRIDGE_YOLO=1` | Pass `--yolo` to `cmd` (default: off) |
-| `CMD_HERDR` | Always forced to `0` in the child, so `cmd`'s built-in Herdr reporting cannot replace a wrapper |
+| Variable | Purpose |
+| --- | --- |
+| `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows) |
+| `CMDCODE_BRIDGE_YOLO=1` | Pass `--yolo` to `cmd` (default off, see Limits) |
+| `CMDCODE_BRIDGE_MODELS` | Comma separated globs of ids to register, e.g. `deepseek/*,z-ai/*,gpt-6-luna` (default: all) |
+| `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
+| `CMDCODE_BRIDGE_CACHE` | Cache file path |
+| `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
+
+`CMD_HERDR=0` is always set for the child, so `cmd`'s built-in Herdr reporting
+cannot replace the agent that Herdr tracks for the Pi pane.
 
 ## How a request runs
 
-One Pi request = one `cmd` run:
-
-```text
-cmd -p --output-format json --skip-onboarding --trust \
-    -m <model-id> [--effort E] [--resume SID] [--yolo]
+```
+cmd -p --output-format json --skip-onboarding --trust -m <model> \
+    [--effort <level>] [--resume <session>] [--yolo]      (prompt on stdin)
 ```
 
-- The prompt is written to `cmd`'s stdin (never in argv, which would overflow
-  the OS argument limit on large prompts); `cmd -p` with no query reads it
-  from there.
-- cwd is the Pi process working directory; the child environment is
-  inherited (plus `CMD_HERDR=0`).
-- Each Pi conversation is bound to one `cmd` session (kept in memory for the
-  lifetime of the Pi process). The first run sends the Pi system prompt, a
-  plain-text transcript of prior messages and the latest user message; later
-  runs pass `--resume <sessionId>` and send only the new user/tool-result
-  text.
-- `text_delta` events stream as text; `tool_queued`/`tool_hook_blocked`
-  events appear as thinking text such as `[cmd tool: write_file /path]` and
-  `[cmd blocked: write_file: <reason>]`.
-- Token usage comes from the last `model_request_end` event (the per-request
-  usage; `result.usage` sums every internal request of the run and would
-  dwarf the context window). Pi input excludes cache reads because `cmd`'s
-  `inputTokens` already includes them. Cost stays 0.
+`cmd`'s NDJSON stream becomes Pi events: text deltas become text; tool activity is
+shown as thinking text (`[cmd tool: ...]`, `[cmd blocked: ...]`) and is never executed
+by Pi; token usage comes from the last model request of the run. The first request of
+a Pi conversation sends Pi's system prompt and the transcript; later ones send only the
+new messages with `--resume`. Cancelling terminates the child (SIGTERM, then SIGKILL).
 
-## Limits and caveats
+## Limits
 
-- **`cmd` uses its own tools.** Pi tool definitions are never executed and the
-  provider never emits Pi tool calls; `cmd` runs its own closed tool loop.
-  Tool activity is only visible as thinking text.
-- **~16.6k input tokens per run.** Every `cmd` run carries Command Code's own
-  system prompt (~16,600 tokens), on top of the prompt this bridge sends.
-- **`--yolo` risk.** In `-p` mode `cmd` blocks file writes and shell commands
-  unless `--yolo` is passed. Enabling `CMDCODE_BRIDGE_YOLO=1` lets `cmd`
-  modify the working tree with no approval gate; leave it off unless you
-  accept that risk.
-- **MiMo has no effort.** `xiaomi/mimo-v2.6-pro` has no adjustable reasoning
-  effort; `cmd` exits 1 with "MiMo V2.6 Pro has no adjustable reasoning
-  effort." if any `--effort` is passed, so this bridge never sends one.
-- **Text only.** The `cmd -p` prompt is plain text; image input is not
-  forwarded.
-- **Session bindings are in-memory.** A Pi restart starts fresh `cmd`
-  conversations (a stable hash of the system prompt plus first user message is
-  used when Pi provides no session id).
-- **`options.onResponse` is not called.** Pi's provider contract includes an
-  `onResponse` hook for HTTP responses; a child process has no HTTP response,
-  so only `onPayload` and `onProviderStreamEvent` are honored.
-- Prompts, keys and provider payloads are never logged to disk.
+- **`cmd` runs its own agent loop and its own tools.** Pi tools, MCP tools and Pi
+  tool calls are not available to these models; output is text.
+- **File writes and shell commands are blocked** in print mode unless
+  `CMDCODE_BRIDGE_YOLO=1`. That flag lets every `commandcode` model in the process
+  write files and run commands without review, so enable it only where that is
+  acceptable.
+- **Cost per run:** each run carries about 16,600 input tokens of Command Code's own
+  system prompt. Prefer fewer, larger requests.
+- **Text only:** images are dropped.
+- **Sessions bind in memory:** restarting Pi starts new `cmd` conversations.
+- `options.onResponse` is not called (a child process has no HTTP response); only
+  `onPayload` and `onProviderStreamEvent` are honored.
+- **Windows is untested.**
+- Prompts, keys and provider payloads are never logged. The cache holds model ids,
+  descriptions and effort levels only.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Few or no `commandcode` models | `cmd --list-models`, then `CMDCODE_BRIDGE_REFRESH=1 pi --list-models commandcode` |
+| Authentication errors | `cmd status` |
+| `has no adjustable reasoning effort` | The model does not accept `--effort`; discovery should have recorded that. Refresh the cache |
+| Writes or commands refused | `CMDCODE_BRIDGE_YOLO=1` (see Limits) |
 
 ## Development
 
@@ -112,6 +123,5 @@ cmd -p --output-format json --skip-onboarding --trust \
 bun test
 ```
 
-Tests never call the real `cmd`: they use a stub executable
-(`tests/fixtures/cmd`) that records its argv/environment and prints scripted
-NDJSON.
+Tests never call a real model. `tests/fixtures/cmd` and `tests/fixtures/cmd-catalog`
+are stub executables; `list-models.txt` and `probes.json` are real `cmd` output.

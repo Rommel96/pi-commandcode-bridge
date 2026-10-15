@@ -12,6 +12,7 @@ import {
 	type TranscriptContext,
 	type Usage,
 } from "@earendil-works/pi-ai";
+import { resolveBin } from "./bin.js";
 import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
 
@@ -102,7 +103,7 @@ async function runCmdTurn(
 	];
 
 	const env = childEnv(options);
-	const bin = env.CMDCODE_BRIDGE_BIN || "cmd";
+	const bin = resolveBin(env);
 	if (env.CMDCODE_BRIDGE_YOLO === "1") argv.push("--yolo");
 
 	let payload: CmdPayload = { argv, prompt };

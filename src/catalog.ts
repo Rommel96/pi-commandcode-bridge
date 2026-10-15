@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveBin } from "./bin.js";
 import { FALLBACK_MODELS, type CmdEffort, type CmdModelSpec } from "./models.js";
 
 /** One model of the live `cmd` catalog. `efforts: null` means the probe was inconclusive. */
@@ -309,7 +310,7 @@ function acquireLock(lock: string): boolean {
 async function refresh(env: NodeJS.ProcessEnv, file: string, previous: CatalogSnapshot | null, detach: boolean): Promise<CatalogSnapshot> {
 	const cwd = path.dirname(file);
 	mkdirSync(cwd, { recursive: true });
-	const snapshot = await discoverCatalog({ bin: env.CMDCODE_BRIDGE_BIN || "cmd", env, cwd, previous, detach });
+	const snapshot = await discoverCatalog({ bin: resolveBin(env), env, cwd, previous, detach });
 	try {
 		writeSnapshot(file, snapshot);
 	} catch {
