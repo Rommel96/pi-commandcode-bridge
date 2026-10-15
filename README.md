@@ -13,6 +13,37 @@ plan, for example). If you have API access, the API-based providers are simpler.
   that stops at `max` becomes `max`; models without adjustable effort never get
   `--effort`).
 
+## Why this instead of an API provider
+
+The other Command Code providers for Pi — including the official
+`@commandcode/pi-commandcode-provider` — talk to the HTTP **Provider API**. On any
+plan with API access that is the simpler choice. But the Command Code docs state
+that *"Go is the only plan without API access"*: there the key works for the CLI
+only and API providers cannot authenticate at all. This package drives the same
+CLI you are already signed in to, so it works on every plan.
+
+| | This package | API-based providers |
+| --- | --- | --- |
+| Transport | the signed-in `cmd`/`cmdc` CLI | Command Code Provider API (HTTP) |
+| Works on the Go plan | yes | no |
+| Credentials | none beyond `cmd login` | an API key |
+| Model list | discovered live from `cmd --list-models` | read from the API |
+
+Two choices make the difference beyond the transport:
+
+- **Probing instead of static tables.** When `cmd` rejects a bogus `--effort` it
+  names the exact levels a model accepts — before calling the model and without
+  billing. Discovery records that answer per model, so Pi's thinking levels land
+  on values the model really supports and new models work on day one.
+- **An honest trade-off.** `cmd` runs its own agent loop and ships its own system
+  prompt (about 16,600 input tokens per run); its tool activity is shown as text
+  and Pi tools are not available to these models. That is the cost of running
+  without API access (see Limits).
+
+If you have API access, an API-based provider is still the better fit there: no
+extra system prompt per run and Pi's own tools work. Use this one where the API
+does not.
+
 ## Requirements
 
 - Pi with extension support.
