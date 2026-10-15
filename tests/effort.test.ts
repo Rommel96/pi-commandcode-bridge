@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { toCmdEffort } from "../src/models.js";
+import { setActiveSpecs, toCmdEffort } from "../src/models.js";
 import {
 	flagValue,
 	resultLine,
@@ -96,4 +96,16 @@ test("argv: MiMo never gets --effort, even when a level is requested", async () 
 test("argv: no --effort when no level was requested", async () => {
 	const argv = await effortArgv("deepseek/deepseek-v4.1-flash", undefined);
 	expect(argv).not.toContain("--effort");
+});
+
+test("argv: efforts of a model discovered at runtime drive the clamping", async () => {
+	setActiveSpecs([{ id: "xai/grok-4.7", name: "xai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"] }]);
+	try {
+		const high = await effortArgv("xai/grok-4.7", "max");
+		expect(flagValue(high, "--effort")).toBe("xhigh");
+		const none = await effortArgv("unlisted/model", "high");
+		expect(none).not.toContain("--effort");
+	} finally {
+		setActiveSpecs(undefined);
+	}
 });

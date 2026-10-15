@@ -1,0 +1,6 @@
+{
+ "z-ai/glm-5.3-flash": "Unknown effort \"bogus\". Supported: low, high, max.\n",
+ "xiaomi/mimo-v2.6-pro": "MiMo V2.6 Pro has no adjustable reasoning effort.\n",
+ "deepseek/deepseek-v4.1-flash": "Unknown effort \"bogus\". Supported: off, low, high, max.\n",
+ "gpt-6-luna": "Unknown effort \"bogus\". Supported: low, medium, high, xhigh, max.\n"
+}

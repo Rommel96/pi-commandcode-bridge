@@ -1,0 +1,22 @@
+Available models  ·  6 models
+
+Open Source
+
+deepseek/deepseek-v4.1-flash           V4.1 hybrid-attention reasoning with vision
+xiaomi/mimo-v2.6-pro                   flagship multimodal agentic coding with 1M context
+z-ai/glm-5.3-flash                     fast, affordable GLM coding with 1M context
+zai-org/glm-5.3                        frontier coding with emergent cyber capabilities
+vendor/tiny-model                      small model with 128K context
+
+OpenAI
+
+gpt-6-luna                             most efficient OpenAI model for focused, high-volume tasks
+
+Pass the full id, or just the short name after the last "/":
+cmd --model moonshotai/kimi-k2.5
+cmd --model kimi-k2.5
+
+Docs:  https://commandcode.ai/docs/reference/cli/models
+
+Decision models (headless only)
+typesafe/jev  typed questions in, probabilities out, $0.042 per 1M input tokens, everything else free

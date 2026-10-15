@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+// Test stub for `cmd --list-models` and the `--effort bogus` probe. Never calls a model.
+//
+// Env contract:
+//   CMD_STUB_LIST            file printed for `--list-models`
+//   CMD_STUB_LIST_FAIL=1     make `--list-models` exit 1
+//   CMD_STUB_PROBES          JSON file: { "<model id>": "<text printed by the probe>" }
+//   CMD_STUB_PROBE_DELAY_MS  delay before a probe answers (for concurrency checks)
+//   CMD_STUB_LOG             file receiving one JSON line per event
+import fs from "node:fs";
+
+const argv = process.argv.slice(2);
+const log = (entry) => {
+  if (process.env.CMD_STUB_LOG) fs.appendFileSync(process.env.CMD_STUB_LOG, JSON.stringify(entry) + "\n");
+};
+const base = { argv, cwd: process.cwd(), cmdHerdr: process.env.CMD_HERDR, t: Date.now() };
+
+if (argv.includes("--list-models")) {
+  log({ kind: "list", ...base });
+  if (process.env.CMD_STUB_LIST_FAIL === "1") {
+    process.stderr.write("boom\n");
+    process.exit(1);
+  }
+  process.stdout.write(fs.readFileSync(process.env.CMD_STUB_LIST, "utf8"));
+  process.exit(0);
+}
+
+const id = argv[argv.indexOf("-m") + 1];
+log({ kind: "probe", id, ...base });
+const probes = JSON.parse(fs.readFileSync(process.env.CMD_STUB_PROBES, "utf8"));
+const delay = Number(process.env.CMD_STUB_PROBE_DELAY_MS || 0);
+if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+log({ kind: "probe-end", id, t: Date.now() });
+process.stdout.write(probes[id] ?? "something unexpected happened\n");
+process.exit(1);
