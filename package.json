@@ -11,7 +11,16 @@
     "cmd"
   ],
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "author": "Rommel96 (https://github.com/Rommel96)",
+  "homepage": "https://github.com/Rommel96/pi-commandcode-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rommel96/pi-commandcode-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Rommel96/pi-commandcode-bridge/issues"
+  },
   "files": [
     "extensions",
     "src",
