@@ -25,7 +25,7 @@ test("argv: -p without a prompt value, --output-format json, --skip-onboarding, 
 	const sb = sandbox();
 	setScenario(sb, okScenario("S1"));
 	await runTurn(testModel(MODEL_ID), "SYSTEM PROMPT TEXT", [userMsg("hello world")], {
-		env: stubEnv(sb),
+		env: stubEnv(sb, { CMDCODE_BRIDGE_YOLO: "" }),
 		sessionId: "argv-1",
 	});
 	const rec = await waitForRecord(sb);
