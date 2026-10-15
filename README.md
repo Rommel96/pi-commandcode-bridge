@@ -100,7 +100,7 @@ so new models appear on the next start.
 | Variable | Purpose |
 | --- | --- |
 | `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows) |
-| `CMDCODE_BRIDGE_YOLO=1` | Pass `--yolo` to `cmd` (default off, see Limits) |
+| `CMDCODE_BRIDGE_YOLO=0` | Do not pass `--yolo` to `cmd` (`--yolo` is on by default, see Limits) |
 | `CMDCODE_BRIDGE_MODELS` | Comma separated globs of ids to register, e.g. `deepseek/*,z-ai/*,gpt-6-luna` (default: all) |
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
 | `CMDCODE_BRIDGE_CACHE` | Cache file path |
@@ -126,10 +126,10 @@ new messages with `--resume`. Cancelling terminates the child (SIGTERM, then SIG
 
 - **`cmd` runs its own agent loop and its own tools.** Pi tools, MCP tools and Pi
   tool calls are not available to these models; output is text.
-- **File writes and shell commands are blocked** in print mode unless
-  `CMDCODE_BRIDGE_YOLO=1`. That flag lets every `commandcode` model in the process
-  write files and run commands without review, so enable it only where that is
-  acceptable.
+- **`cmd` runs with `--yolo` by default**, so install, login and use works without
+  extra setup. Every `commandcode` model can write files and run shell commands
+  without review. Set `CMDCODE_BRIDGE_YOLO=0` to restore `cmd`'s print-mode
+  permission checks; writes and commands are then blocked.
 - **Cost per run:** each run carries about 16,600 input tokens of Command Code's own
   system prompt. Prefer fewer, larger requests.
 - **Text only:** images are dropped.
@@ -147,7 +147,7 @@ new messages with `--resume`. Cancelling terminates the child (SIGTERM, then SIG
 | Few or no `commandcode` models | `cmd --list-models`, then `CMDCODE_BRIDGE_REFRESH=1 pi --list-models commandcode` |
 | Authentication errors | `cmd status` |
 | `has no adjustable reasoning effort` | The model does not accept `--effort`; discovery should have recorded that. Refresh the cache |
-| Writes or commands refused | `CMDCODE_BRIDGE_YOLO=1` (see Limits) |
+| Writes or commands refused | Check `CMDCODE_BRIDGE_YOLO` is not `0` (see Limits) |
 
 ## Development
 

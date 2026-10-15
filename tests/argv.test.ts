@@ -21,7 +21,7 @@ function okScenario(sessionId: string) {
 	};
 }
 
-test("argv: -p without a prompt value, --output-format json, --skip-onboarding, --trust, -m <id>, no --yolo by default", async () => {
+test("argv: -p without a prompt value, --output-format json, --skip-onboarding, --trust, -m <id>, --yolo by default", async () => {
 	const sb = sandbox();
 	setScenario(sb, okScenario("S1"));
 	await runTurn(testModel(MODEL_ID), "SYSTEM PROMPT TEXT", [userMsg("hello world")], {
@@ -35,7 +35,7 @@ test("argv: -p without a prompt value, --output-format json, --skip-onboarding, 
 	expect(rec.argv).toContain("--trust");
 	expect(rec.argv).toContain("-m");
 	expect(flagValue(rec.argv, "-m")).toBe(MODEL_ID);
-	expect(rec.argv).not.toContain("--yolo");
+	expect(rec.argv).toContain("--yolo");
 	expect(rec.argv).not.toContain("--resume");
 	expect(rec.argv.join(" ")).not.toContain("hello world");
 	const prompt = rec.stdin;
@@ -43,7 +43,7 @@ test("argv: -p without a prompt value, --output-format json, --skip-onboarding, 
 	expect(prompt).toContain("SYSTEM PROMPT TEXT");
 });
 
-test("argv: --yolo only when CMDCODE_BRIDGE_YOLO=1", async () => {
+test("argv: --yolo is on by default and only CMDCODE_BRIDGE_YOLO=0 turns it off", async () => {
 	const sb = sandbox();
 	setScenario(sb, okScenario("S2"));
 	await runTurn(testModel(MODEL_ID), "S", [userMsg("q")], {

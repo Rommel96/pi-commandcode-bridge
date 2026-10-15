@@ -104,7 +104,8 @@ async function runCmdTurn(
 
 	const env = childEnv(options);
 	const bin = resolveBin(env);
-	if (env.CMDCODE_BRIDGE_YOLO === "1") argv.push("--yolo");
+	// On by default so print mode can run tools; CMDCODE_BRIDGE_YOLO=0 opts out.
+	if (env.CMDCODE_BRIDGE_YOLO !== "0") argv.push("--yolo");
 
 	let payload: CmdPayload = { argv, prompt };
 	if (options?.onPayload) {
