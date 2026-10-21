@@ -4,7 +4,7 @@
  * the shim's own behavior is not in the way.
  */
 import net from "node:net";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, test, expect } from "bun:test";
@@ -86,7 +86,8 @@ test("broker exposes shim spawn args with the tool definitions base64-encoded", 
 		expect(existsSync(shimPath())).toBe(true);
 		const socketPath = env.PICC_SHIM_SOCKET;
 		expect(typeof socketPath).toBe("string");
-		const decoded = JSON.parse(Buffer.from(env.PICC_SHIM_TOOLS as string, "base64").toString("utf8"));
+		const decoded = JSON.parse(readFileSync(env.PICC_SHIM_TOOLS_FILE as string, "utf8"));
+		expect(statSync(env.PICC_SHIM_TOOLS_FILE as string).mode & 0o777).toBe(0o600);
 		expect(decoded).toEqual([
 			{ name: "subagent_run", description: "Delegate", inputSchema: { type: "object", properties: { task: { type: "string" } } } },
 		]);

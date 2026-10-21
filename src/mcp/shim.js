@@ -18,6 +18,7 @@
  *             may carry the same payload (argv wins).
  */
 import net from "node:net";
+import { readFileSync } from "node:fs";
 
 const SERVER_INFO = { name: "pi-commandcode-bridge", version: "0.2.0" };
 
@@ -37,13 +38,18 @@ function parseArgs(argv, env) {
 	};
 	const socket = valueFor("--socket") || env.PICC_SHIM_SOCKET;
 	if (!socket) fail("shim: --socket (or PICC_SHIM_SOCKET) is required");
+	const toolsFile = env.PICC_SHIM_TOOLS_FILE;
 	const toolsB64 = valueFor("--tools") || env.PICC_SHIM_TOOLS;
-	if (!toolsB64) fail("shim: --tools <base64-json> (or PICC_SHIM_TOOLS) is required");
+	if (!toolsFile && !toolsB64) {
+		fail("shim: PICC_SHIM_TOOLS_FILE, --tools <base64-json> or PICC_SHIM_TOOLS is required");
+	}
 	let tools;
 	try {
-		tools = JSON.parse(Buffer.from(toolsB64, "base64").toString("utf8"));
+		tools = toolsFile
+			? JSON.parse(readFileSync(toolsFile, "utf8"))
+			: JSON.parse(Buffer.from(toolsB64, "base64").toString("utf8"));
 	} catch {
-		fail("shim: --tools must decode to a JSON array");
+		fail("shim: tools must decode to a JSON array");
 	}
 	if (!Array.isArray(tools)) fail("shim: --tools must decode to a JSON array");
 	// Optional only for standalone use; the bridge always sets it.
