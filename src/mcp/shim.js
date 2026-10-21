@@ -46,7 +46,9 @@ function parseArgs(argv, env) {
 		fail("shim: --tools must decode to a JSON array");
 	}
 	if (!Array.isArray(tools)) fail("shim: --tools must decode to a JSON array");
-	return { socket, tools };
+	// Optional only for standalone use; the bridge always sets it.
+	const token = env.PICC_SHIM_TOKEN || undefined;
+	return { socket, tools, token };
 }
 
 // ---------------------------------------------------------------------------
@@ -69,10 +71,12 @@ class RouterLink {
 	#endpoint;
 	#socket = null;
 	#connecting = null;
+	#token;
 	#parked = new Map(); // ipc frame id -> onResult({content,isError})
 
-	constructor(endpoint) {
+	constructor(endpoint, token) {
 		this.#endpoint = endpoint;
+		this.#token = token;
 	}
 
 	/** Connect (or reuse). Resolves with the socket. */
@@ -148,7 +152,7 @@ class RouterLink {
 		const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 		return new Promise((resolve) => {
 			this.#parked.set(id, resolve);
-			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args }) + "\n");
+			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args, token: this.#token }) + "\n");
 		});
 	}
 
@@ -165,8 +169,8 @@ class RouterLink {
 // ---------------------------------------------------------------------------
 
 export function main(argv = process.argv.slice(2), env = process.env) {
-	const { socket, tools } = parseArgs(argv, env);
-	const link = new RouterLink(socket);
+	const { socket, tools, token } = parseArgs(argv, env);
+	const link = new RouterLink(socket, token);
 	const known = new Set(tools.map((t) => t.name));
 
 	const onRequest = (id, method, params) => {

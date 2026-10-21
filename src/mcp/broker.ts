@@ -94,6 +94,8 @@ export function startBroker(options: BrokerOptions): Broker {
 	const ids = new Map<string, string>();
 	/** Parked calls in arrival order (id lookups included). */
 	const pending: BrokerCall[] = [];
+	/** Per-run secret the shim must send with every frame. */
+	const token = randomBytes(32).toString("base64url");
 
 	const ipcServer: IpcServer = startIpcServer(socketPath, (call) => {
 		const id = `picc-${randomBytes(6).toString("base64url")}`;
@@ -106,7 +108,7 @@ export function startBroker(options: BrokerOptions): Broker {
 		}
 		// The deferred: parked until Pi answers (respond) or the run is torn down.
 		return new Promise<IpcBrokerResult>(() => {});
-	});
+	}, { token });
 
 	return {
 		pending,
@@ -117,7 +119,7 @@ export function startBroker(options: BrokerOptions): Broker {
 			return {
 				command: options.runtime ?? shimRuntime(),
 				args: [shimPath()],
-				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS: toolsB64 },
+				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS: toolsB64, PICC_SHIM_TOKEN: token },
 			};
 		},
 		respond: (id, result: IpcBrokerResult) => {

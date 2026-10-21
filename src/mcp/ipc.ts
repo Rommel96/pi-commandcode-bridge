@@ -2,15 +2,21 @@
  * Broker transport: one line-JSON protocol over a unix socket (or a named pipe
  * on Windows). Each shim connection carries one call per frame:
  *
- *   shim (client)  ->  {"v":1,"id":"<nonce>","kind":"call","name":"subagent_run","arguments":{...}}
+ *   shim (client)  ->  {"v":1,"id":"<nonce>","kind":"call","name":"subagent_run","arguments":{...},"token":"<session token>"}
  *   broker         ->  {"v":1,"id":"<nonce>","kind":"result","content":[...],"isError":false}
  *
  * The handler returns a Promise per call — a deferred: the broker (and later
  * the provider) parks the call until Pi's tool result arrives. Don't return too
  * early: the promise must resolve only once; `respond(id, ...)` is the manual
  * way to settle one from outside.
+ *
+ * When the server has a token, a frame without the exact token closes its
+ * connection, and each result is written only to the connection that sent the
+ * call: another local process that reaches the socket can neither inject calls
+ * nor read results.
  */
 import net from "node:net";
+import { timingSafeEqual } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import type { Tool } from "@earendil-works/pi-ai";
 
@@ -59,7 +65,14 @@ function isPipeEndpoint(path: string): boolean {
 }
 
 /** Start a passive broker transport. `path` may be a unix socket file or a `\\.\pipe\<name>`. */
-export function startIpcServer(path: string, handler: IpcRouteHandler): IpcServer {
+export function startIpcServer(path: string, handler: IpcRouteHandler, options: { token?: string } = {}): IpcServer {
+	const expected = options.token ? Buffer.from(options.token, "utf8") : undefined;
+	const authorized = (token: unknown): boolean => {
+		if (!expected) return true;
+		if (typeof token !== "string") return false;
+		const given = Buffer.from(token, "utf8");
+		return given.length === expected.length && timingSafeEqual(given, expected);
+	};
 	const conns = new Set<net.Socket>();
 	const parked = new Map<string, (result: IpcBrokerResult) => void>();
 	let closed = false;
@@ -76,7 +89,7 @@ export function startIpcServer(path: string, handler: IpcRouteHandler): IpcServe
 				let line = buffer.slice(0, idx);
 				buffer = buffer.slice(idx + 1);
 				idx = buffer.indexOf("\n");
-				if (line.trim()) routeLine(line);
+				if (line.trim()) routeLine(conn, line);
 			}
 		});
 		conn.on("error", () => {
@@ -85,17 +98,21 @@ export function startIpcServer(path: string, handler: IpcRouteHandler): IpcServe
 	});
 
 	/** One JSON line from the shim: validate, park on the handler's deferred. */
-	function routeLine(line: string): void {
+	function routeLine(conn: net.Socket, line: string): void {
 		let parsed: Record<string, unknown> | null = null;
 		try {
 			parsed = JSON.parse(line) as Record<string, unknown>;
 		} catch {
 			return; // the shim only sends well-formed frames
 		}
+		if (!authorized(parsed.token)) {
+			conn.destroy();
+			return;
+		}
 		const id = typeof parsed.id === "string" ? parsed.id : "";
 		const name = typeof parsed.name === "string" ? parsed.name : "";
 		if (parsed.kind !== "call" || !id || !name) {
-			respond("", { content: [{ type: "text", text: "malformed router frame" }], isError: true });
+			send(conn, { content: [{ type: "text", text: "malformed router frame" }], isError: true });
 			return;
 		}
 		if (parked.has(id)) return; // a shim never re-uses an id before the result arrives
@@ -105,7 +122,7 @@ export function startIpcServer(path: string, handler: IpcRouteHandler): IpcServe
 				: {};
 		const settle = (result: IpcBrokerResult): void => {
 			parked.delete(id);
-			send({ id, content: result.content, isError: result.isError });
+			send(conn, { id, content: result.content, isError: result.isError });
 		};
 		parked.set(id, settle);
 		try {
@@ -123,15 +140,12 @@ export function startIpcServer(path: string, handler: IpcRouteHandler): IpcServe
 		}
 	}
 
-	/** Write one result frame; every shim connection filters by id, so one send is enough. */
-	function send(frame: { id?: string; content?: unknown; isError?: boolean }): void {
-		if (closed) return;
-		const line =
-			JSON.stringify({ v: 1, id: frame.id ?? "", kind: "result", content: frame.content ?? [], isError: Boolean(frame.isError) }) + "\n";
-		for (const conn of conns) {
-			if (conn.writableLength > FRAME_LIMIT) continue;
-			conn.write(line);
-		}
+	/** Write one result frame to the connection that sent the call. */
+	function send(conn: net.Socket, frame: { id?: string; content?: unknown; isError?: boolean }): void {
+		if (closed || conn.destroyed || conn.writableLength > FRAME_LIMIT) return;
+		conn.write(
+			JSON.stringify({ v: 1, id: frame.id ?? "", kind: "result", content: frame.content ?? [], isError: Boolean(frame.isError) }) + "\n",
+		);
 	}
 
 	// A stale socket file from a crashed previous run fails listen() with EADDRINUSE; unlink first.

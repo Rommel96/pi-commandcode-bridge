@@ -31,7 +31,7 @@ class RawShim {
 	socket: net.Socket;
 	out: Array<Record<string, any>> = [];
 	waiters: Array<(v: Record<string, any>) => void> = [];
-	constructor(socketPath: string) {
+	constructor(socketPath: string, private token?: string) {
 		this.socket = net.connect(socketPath);
 		this.socket.setNoDelay(true);
 		let buffer = "";
@@ -52,7 +52,7 @@ class RawShim {
 	}
 	call(name: string, args: unknown, id?: string): void {
 		const frameId = id ?? `frame-${nextFrameSeq++}`;
-		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args }) + "\n");
+		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args, token: this.token }) + "\n");
 	}
 	reply(msTimeout = 5000): Promise<Record<string, any> | null> {
 		return new Promise((resolve) => {
@@ -108,7 +108,7 @@ test("broker parks calls, de-mangles the MCP tool name and resolves via respond"
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
 	const socketPath = broker.socketPath;
-	const shim = new RawShim(socketPath);
+	const shim = new RawShim(socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 	try {
 		await new Promise((r) => setTimeout(r, 60));
 		shim.call("mcp__pi-cmd-bridge-abc123__subagent_run", { task: "delegate this" });
@@ -139,11 +139,11 @@ test("broker parks calls, de-mangles the MCP tool name and resolves via respond"
 test("broker rejects every parked call on rejectAll", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
-	const shim = new RawShim(broker.socketPath);
+	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 	try {
 		await new Promise((r) => setTimeout(r, 60));
 		shim.call("subagent_run", {});
-		const second = new RawShim(broker.socketPath);
+		const second = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 		await new Promise((r) => setTimeout(r, 60));
 		second.call("subagent_run", {});
 		await new Promise((r) => setTimeout(r, 120));
@@ -180,7 +180,7 @@ test("a completed broker cannot reach out: respond is a no-op after close", asyn
 });
 
 function shimClosed(broker: ReturnType<typeof startBroker>): void {
-	const shim = new RawShim(broker.socketPath);
+	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 	shim.close();
 	broker.close();
 }
