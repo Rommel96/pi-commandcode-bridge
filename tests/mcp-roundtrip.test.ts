@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { normalizeContext, type Tool } from "@earendil-works/pi-ai";
 import {
 	collectEvents,
@@ -40,10 +41,19 @@ const BASH_TOOL: Tool = {
 	},
 };
 
+/** Collect the argv the stub `cmd` received, via its `emit_argv` scenario step. */
+function captureArgv(into: string[][]) {
+	return async (data: unknown): Promise<void> => {
+		const event = (data as { event?: { type?: string; argv?: string[] } })?.event;
+		if (event?.type === "stub_argv" && Array.isArray(event.argv)) into.push(event.argv);
+	};
+}
+
 test("tools present: cmd tool call yields toolCall event and stopReason: 'toolUse'", async () => {
 	const sb = sandbox();
 	setScenario(sb, {
 		script: [
+			{ emit_argv: true },
 			{ emit: runStart("S-MCP-1") },
 			{ emit: textDelta("Starting delegation...") },
 			{
@@ -64,12 +74,25 @@ test("tools present: cmd tool call yields toolCall event and stopReason: 'toolUs
 		tools: [SUBAGENT_TOOL],
 	});
 
+	const seenArgv: string[][] = [];
 	const stream = streamSimple(testModel(MODEL_ID), context, {
 		env: stubEnv(sb),
 		sessionId: "mcp-session-1",
+		onProviderStreamEvent: captureArgv(seenArgv),
 	});
 
 	const events = await collectEvents(stream);
+
+	const argv = seenArgv[0];
+	expect(argv).toBeDefined();
+	const modIndex = argv!.indexOf("--mod");
+	expect(modIndex).toBeGreaterThanOrEqual(0);
+	const modPath = argv![modIndex + 1]!;
+	expect(modPath.endsWith("pi-delegation-guard.ts")).toBe(true);
+	expect(existsSync(modPath)).toBe(true);
+	const modSource = readFileSync(modPath, "utf8");
+	expect(modSource).toContain("__subagent_run");
+	expect(modSource).toContain("Do not retry agent");
 
 	const toolStarts = events.filter((e) => e.type === "toolcall_start");
 	const toolEnds = events.filter((e) => e.type === "toolcall_end");
@@ -122,6 +145,64 @@ test("tools present: cmd tool call yields toolCall event and stopReason: 'toolUs
 		.map((b) => b.text)
 		.join("");
 	expect(fullText).toContain("Finished delegation.");
+});
+
+test("CMDCODE_BRIDGE_NATIVE_AGENT=allow keeps cmd's native agent tool", async () => {
+	const sb = sandbox();
+	setScenario(sb, {
+		script: [
+			{ emit_argv: true },
+			{ emit: runStart("S-NATIVE") },
+			{ emit: resultLine("S-NATIVE", "ok") },
+		],
+	});
+
+	const context = normalizeContext({
+		systemPrompt: "S",
+		messages: [userMsg("q")],
+		tools: [SUBAGENT_TOOL],
+	});
+	const seenArgv: string[][] = [];
+	const events = await collectEvents(
+		streamSimple(testModel(MODEL_ID), context, {
+			env: stubEnv(sb, { CMDCODE_BRIDGE_NATIVE_AGENT: "allow" }),
+			sessionId: "native-agent-allow",
+			onProviderStreamEvent: captureArgv(seenArgv),
+		}),
+	);
+
+	expect(events.some((e) => e.type === "done")).toBe(true);
+	expect(seenArgv).toHaveLength(1);
+	expect(seenArgv[0]).not.toContain("--mod");
+});
+
+test("runs without subagent_run do not add the guard mod", async () => {
+	const sb = sandbox();
+	setScenario(sb, {
+		script: [
+			{ emit_argv: true },
+			{ emit: runStart("S-NO-SUBAGENT") },
+			{ emit: resultLine("S-NO-SUBAGENT", "ok") },
+		],
+	});
+
+	const context = normalizeContext({
+		systemPrompt: "S",
+		messages: [userMsg("q")],
+		tools: [BASH_TOOL],
+	});
+	const seenArgv: string[][] = [];
+	const events = await collectEvents(
+		streamSimple(testModel(MODEL_ID), context, {
+			env: stubEnv(sb),
+			sessionId: "no-subagent",
+			onProviderStreamEvent: captureArgv(seenArgv),
+		}),
+	);
+
+	expect(events.some((e) => e.type === "done")).toBe(true);
+	expect(seenArgv).toHaveLength(1);
+	expect(seenArgv[0]).not.toContain("--mod");
 });
 
 test("empty tools array runs direct without MCP registration", async () => {
