@@ -6,6 +6,9 @@ import {
 	removeStaleBridgeServers,
 	MCP_NAME_PREFIX,
 } from "../src/mcp/register.js";
+import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { sandbox, setScenario, stubEnv, STUB_BIN, waitForRecord, waitFor, readRecord } from "./helpers.js";
 
 test("mcpServerName generates deterministic prefix-bound names", () => {
@@ -16,7 +19,24 @@ test("mcpServerName generates deterministic prefix-bound names", () => {
 	expect(name1.startsWith(MCP_NAME_PREFIX)).toBe(true);
 	expect(name1).toBe(name2);
 	expect(name1).not.toBe(name3);
-	expect(name1.length).toBe(MCP_NAME_PREFIX.length + 8);
+	expect(name1.startsWith(`${MCP_NAME_PREFIX}${process.pid}-`)).toBe(true);
+});
+
+test("removeStaleBridgeServers keeps servers owned by live processes", async () => {
+	const sb = sandbox();
+	const cfg = { transport: "stdio" as const, command: "node", args: [] };
+	const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+	const live = mcpServerName("other-live-session");
+	const dead = `${MCP_NAME_PREFIX}${deadPid}-deadbeef`;
+	const legacy = `${MCP_NAME_PREFIX}cafebabe`;
+	for (const name of [live, dead, legacy, "user-custom-server"]) {
+		await registerMcpServer(STUB_BIN, stubEnv(sb), name, cfg, sb.dir);
+	}
+
+	await removeStaleBridgeServers(STUB_BIN, stubEnv(sb), sb.dir);
+
+	const left = readdirSync(join(sb.dir, "mcp-servers")).map((f) => f.replace(/\.json$/, "")).sort();
+	expect(left).toEqual([live, "user-custom-server"].sort());
 });
 
 test("registerMcpServer invokes cmd mcp add-json with local scope", async () => {
