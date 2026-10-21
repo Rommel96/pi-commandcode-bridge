@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { normalizeContext } from "@earendil-works/pi-ai";
@@ -45,8 +45,15 @@ export interface StubScenario {
 	ignoreSigterm?: boolean;
 }
 
+// Distinct prefix from the broker's run dirs; removed when the test process exits.
+const sandboxes: string[] = [];
+export function removeSandboxes(): void {
+	for (const dir of sandboxes.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
 export function sandbox(): Sandbox {
-	const dir = mkdtempSync(path.join(tmpdir(), "pi-cmd-bridge-"));
+	const dir = mkdtempSync(path.join(tmpdir(), "pi-cmd-bridge-test-"));
+	sandboxes.push(dir);
 	return { dir, recordFile: path.join(dir, "record.json"), scenarioFile: path.join(dir, "scenario.json") };
 }
 
@@ -57,6 +64,9 @@ export function setScenario(sb: Sandbox, scenario: StubScenario): void {
 /** Env for the child: points at the stub and its record/scenario files. */
 export function stubEnv(sb: Sandbox, extra: Record<string, string> = {}): Record<string, string> {
 	return {
+		// The stub's `#!/usr/bin/env node` shebang needs PATH to find node; without it
+		// only systems with node in the default PATH (e.g. /usr/bin on Linux) pass.
+		PATH: process.env.PATH ?? "",
 		CMDCODE_BRIDGE_BIN: STUB_BIN,
 		CMD_STUB_RECORD: sb.recordFile,
 		CMD_STUB_SCENARIO: sb.scenarioFile,
@@ -143,10 +153,10 @@ export function assistantMsg(text: string): Message {
 	return message;
 }
 
-export function toolResultMsg(toolName: string, text: string): Message {
+export function toolResultMsg(toolName: string, text: string, toolCallId = `call-${toolName}`): Message {
 	return {
 		role: "toolResult",
-		toolCallId: `call-${toolName}`,
+		toolCallId,
 		toolName,
 		content: [{ type: "text", text }],
 		isError: false,

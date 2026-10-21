@@ -4,9 +4,13 @@ A [Pi](https://pi.dev) provider that runs [Command Code](https://commandcode.ai)
 models through the **`cmd` CLI** instead of the HTTP Provider API.
 
 Pick it when your Command Code plan can run the CLI but has no API access (the Go
-plan, for example). If you have API access, the API-based providers are simpler.
+plan, for example), or when you want a Command Code model to orchestrate Pi
+subagents from inside `cmd`'s own agent loop.
 
 - Every request is one `cmd -p` run; later turns resume the same `cmd` session.
+- Pi tools and subagent orchestration (`subagent_run`) are exposed to `cmd` via
+  an ephemeral stdio MCP shim. When called, the turn suspends with `stopReason: "toolUse"`,
+  yielding tool execution back to Pi and resuming `cmd` once the result arrives.
 - The model list and each model's supported reasoning efforts are **discovered from
   `cmd` itself** and cached, so new models appear without a package update.
 - Pi's thinking levels map onto the efforts each model accepts (`xhigh` on a model
@@ -28,33 +32,43 @@ CLI you are already signed in to, so it works on every plan.
 | Works on the Go plan | yes | no |
 | Credentials | none beyond `cmd login` | an API key |
 | Model list | discovered live from `cmd --list-models` | read from the API |
+| Agent loop | `cmd`'s own (native tools, mods, `cmd` sessions) | Pi's |
+| Pi tools inside `cmd`'s loop | bridged over MCP, including `subagent_run` | n/a |
 
-Two choices make the difference beyond the transport:
+As of this release, the other Command Code packages for Pi on npm
+(`@commandcode/pi-commandcode-provider`, `pi-commandcode-provider`,
+`@bacnh85/pi-commandcode`, `@arhen/pi-add-commandcode`) all use the HTTP Provider
+API; none of them drives the CLI.
+
+Three choices make the difference beyond the transport:
 
 - **Probing instead of static tables.** When `cmd` rejects a bogus `--effort` it
   names the exact levels a model accepts — before calling the model and without
   billing. Discovery records that answer per model, so Pi's thinking levels land
   on values the model really supports and new models work on day one.
+- **Pi tools inside `cmd`.** Host Pi tools (such as `subagent_run` or harness
+  tools) are bridged into `cmd` through an ephemeral stdio MCP shim, so a Command
+  Code model can act as the root orchestrator of Pi subagent sessions (see Tool
+  delegation).
 - **An honest trade-off.** `cmd` runs its own agent loop and ships its own system
-  prompt (about 16,600 input tokens per run); its tool activity is shown as text
-  and Pi tools are not available to these models. That is the cost of running
-  without API access (see Limits).
+  prompt (about 16,600 input tokens per run); native `cmd` tool activity is shown as
+  thinking text (`[cmd tool: ...]`).
 
-If you have API access, an API-based provider is still the better fit there: no
-extra system prompt per run and Pi's own tools work. Use this one where the API
-does not.
+If you have API access and do not need `cmd`'s agent loop, an API-based provider is
+still the leaner fit: no extra system prompt per run and Pi drives tools directly.
 
 ## Requirements
 
 - Pi with extension support.
 - The Command Code CLI installed and signed in (`cmd login`; `cmdc` on Windows).
-- Node 20+ (the extension uses only Node APIs).
+- Node 20+ on `PATH`: the MCP shim that `cmd` spawns runs as a Node script
+  (override with `CMDCODE_BRIDGE_SHIM_RUNTIME`).
 
 ## Install
 
 ```bash
 pi install git:github.com/Rommel96/pi-commandcode-bridge # straight from GitHub, no clone needed
-pi install npm:pi-commandcode-bridge                     # once published
+pi install npm:pi-commandcode-bridge
 pi install /path/to/pi-commandcode-bridge                # from a checkout
 ```
 
@@ -95,6 +109,37 @@ interactive session. A short one-shot run exits without waiting for it; use
 `CMDCODE_BRIDGE_REFRESH=1` for scripts. The list is read when the extension loads,
 so new models appear on the next start.
 
+## Tool delegation and subagent orchestration
+
+When a model running through `pi-commandcode-bridge` is used as an orchestrator (e.g. in Gentle-Shell or with Pi subagent extensions), Pi's active tools are exposed to `cmd`:
+
+1. **Ephemeral MCP Server**: The bridge starts an in-process broker and registers an ephemeral stdio MCP shim (`shim.js`) with `cmd` using machine-private local scope (`~/.commandcode/projects/<slug>/mcp.json`).
+2. **Suspension & Yielding**: When the model invokes a bridged tool (such as `subagent_run`), the shim forwards the call over a unix socket to the broker and parks the execution. The bridge concludes the Pi turn with `stopReason: "toolUse"` and emits the corresponding `toolCall` events to Pi.
+3. **Resumption**: Pi executes the tool (e.g. launching a subagent), returns the output via `toolResult` on the subsequent turn, which unblocks the parked MCP call. `cmd` continues streaming reasoning and final text.
+4. **Cleanup**: When the conversation finishes or aborts, the MCP registration and unix socket are removed. If Pi is killed before that, the leftover registration is removed by the next run in the same project once its owning process is gone; registrations of other live Pi sessions are kept.
+
+The broker only serves its own run: every frame must carry a per-run random token,
+results go back only to the connection that made the call, and calls from a `cmd`
+process other than the run's own child are refused. That last check matters because
+`cmd`'s local MCP scope is shared by every session in the same project, so a
+concurrent session's `cmd` also starts this run's shim. Tool schemas reach the shim
+through a `0600` file in the run's private temp directory, not the environment, so
+large tool sets stay below Linux's 128 KiB per-string `execve` limit.
+
+Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) continue running in-process inside `cmd` and display as thinking blocks (`[cmd tool: ...]`).
+
+`cmd` also ships a built-in `agent` tool. When Pi's `subagent_run` is among the
+exposed tools, the bridge generates a small `cmd` mod that blocks `agent` and tells
+the model to use the bridged `mcp__<server>__subagent_run` instead, so the subagent
+runs in the Pi host and stays visible to the host (for example in Gentle-Shell's
+agent list). Set `CMDCODE_BRIDGE_NATIVE_AGENT=allow` to keep `cmd`'s native agents
+available and skip the guard.
+
+Task-mode subagents can run for many minutes, so the bridge sets the child's
+`MCP_TOOL_TIMEOUT` to at least 30 minutes. The host may also serialize task-mode
+subagents; use the tool's background mode when several need to overlap, then collect
+them by task id.
+
 ## Configuration
 
 | Variable | Purpose |
@@ -105,6 +150,10 @@ so new models appear on the next start.
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
 | `CMDCODE_BRIDGE_CACHE` | Cache file path |
 | `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
+| `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
+| `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
+| `CMDCODE_BRIDGE_MCP_TIMEOUT` | Exact MCP timeout in ms for the `cmd` child (default: `1800000` / 30 min) |
+| `MCP_TOOL_TIMEOUT` | Lower values are raised to 30 min so long subagent calls survive the model turn plus the subagent execution |
 
 `CMD_HERDR=0` is always set for the child, so `cmd`'s built-in Herdr reporting
 cannot replace the agent that Herdr tracks for the Pi pane.
@@ -116,16 +165,19 @@ cmd -p --output-format json --skip-onboarding --trust -m <model> \
     [--effort <level>] [--resume <session>] [--yolo]      (prompt on stdin)
 ```
 
-`cmd`'s NDJSON stream becomes Pi events: text deltas become text; tool activity is
-shown as thinking text (`[cmd tool: ...]`, `[cmd blocked: ...]`) and is never executed
-by Pi; token usage comes from the last model request of the run. The first request of
-a Pi conversation sends Pi's system prompt and the transcript; later ones send only the
-new messages with `--resume`. Cancelling terminates the child (SIGTERM, then SIGKILL).
+`cmd`'s NDJSON stream becomes Pi events: text deltas become text; native `cmd`
+tool activity is shown as thinking text (`[cmd tool: ...]`, `[cmd blocked: ...]`)
+and never executed by Pi. Tools exposed by the Pi host are bridged the other way
+through the ephemeral MCP server (see Tool delegation). Token usage comes from the
+last model request of the run. The first request of a Pi conversation sends Pi's
+system prompt and the transcript; later ones send only the new messages with
+`--resume`. Cancelling terminates the child (SIGTERM, then SIGKILL).
 
 ## Limits
 
-- **`cmd` runs its own agent loop and its own tools.** Pi tools, MCP tools and Pi
-  tool calls are not available to these models; output is text.
+- **Native `cmd` tools run internally:** Built-in `cmd` tools (`read_file`, `write_file`, etc.)
+  run inside the `cmd` process with `--yolo` and display as thinking; Pi tools and subagents
+  are delegated via the bidirectional MCP shim.
 - **`cmd` runs with `--yolo` by default**, so install, login and use works without
   extra setup. Every `commandcode` model can write files and run shell commands
   without review. Set `CMDCODE_BRIDGE_YOLO=0` to restore `cmd`'s print-mode

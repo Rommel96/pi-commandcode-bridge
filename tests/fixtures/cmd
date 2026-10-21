@@ -9,17 +9,76 @@
 //         { "emit": { ...any JSON value... } },   // printed as one NDJSON line
 //         { "raw": "<base64 bytes>" },            // written verbatim (chunk splits)
 //         { "stderr": "text" },                   // written to stderr
-//         { "hang": true }                        // then wait until killed
+//         { "hang": true },                       // wait until killed
+//         { "call_mcp": { "serverPrefix": "pi-cmd-bridge-", "tool": "subagent_run", "args": { ... } } }
 //       ],
 //       "stderr": "text",        // written to stderr before exiting
 //       "exitCode": 0,           // process exit code (default 0)
 //       "ignoreSigterm": false   // swallow SIGTERM (forces SIGKILL escalation)
 //     }
 import fs from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const argv = process.argv.slice(2);
 const recordPath = process.env.CMD_STUB_RECORD;
 const scenarioPath = process.env.CMD_STUB_SCENARIO;
+
+let scenario = {};
+if (scenarioPath) {
+  try {
+    scenario = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
+  } catch {
+    scenario = {};
+  }
+}
+
+// Per-sandbox store so tests never see each other's registrations.
+const mcpStoreDir = process.env.CMD_STUB_SCENARIO
+  ? path.join(path.dirname(process.env.CMD_STUB_SCENARIO), "mcp-servers")
+  : path.join(tmpdir(), "cmd-stub-mcp-servers");
+
+if (argv[0] === "mcp") {
+  if (recordPath) {
+    fs.writeFileSync(
+      recordPath,
+      JSON.stringify(
+        { argv, env: process.env, pid: process.pid, cwd: process.cwd(), stdin: "" },
+        null,
+        2,
+      ),
+    );
+  }
+  if (argv[1] === "add-json") {
+    if (typeof scenario.stderr === "string") process.stderr.write(scenario.stderr);
+    if (typeof scenario.exitCode === "number" && scenario.exitCode !== 0) process.exit(scenario.exitCode);
+    fs.mkdirSync(mcpStoreDir, { recursive: true });
+    fs.writeFileSync(path.join(mcpStoreDir, `${argv[2]}.json`), argv[3] || "{}");
+    process.exit(0);
+  }
+  if (argv[1] === "remove") {
+    try {
+      fs.unlinkSync(path.join(mcpStoreDir, `${argv[2]}.json`));
+    } catch {}
+    process.exit(0);
+  }
+  if (argv[1] === "list") {
+    let files = [];
+    try {
+      files = fs.readdirSync(mcpStoreDir);
+    } catch {}
+    process.stdout.write("NAME                          TYPE   SCOPE    AUTH    STATUS\n");
+    for (const f of files) {
+      if (f.endsWith(".json")) {
+        const name = f.slice(0, -5);
+        process.stdout.write(`${name.padEnd(30)} stdio  local    none    ok\n`);
+      }
+    }
+    process.exit(0);
+  }
+  process.exit(0);
+}
 
 const stdinChunks = [];
 for await (const chunk of process.stdin) stdinChunks.push(chunk);
@@ -36,17 +95,78 @@ if (recordPath) {
   );
 }
 
-let scenario = {};
-if (scenarioPath) {
-  try {
-    scenario = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
-  } catch {
-    scenario = {};
-  }
-}
-
 if (scenario.ignoreSigterm) {
   process.on("SIGTERM", () => {});
+}
+
+async function runMcpCall(target) {
+  let serverCfg = null;
+  try {
+    const files = fs.readdirSync(mcpStoreDir);
+    for (const f of files) {
+      if (f.startsWith(target.serverPrefix || "") && f.endsWith(".json")) {
+        serverCfg = JSON.parse(fs.readFileSync(path.join(mcpStoreDir, f), "utf8"));
+        break;
+      }
+    }
+  } catch {}
+
+  if (!serverCfg) {
+    process.stderr.write(`[cmd-stub] no mcp server found matching prefix ${target.serverPrefix}\n`);
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(serverCfg.command, serverCfg.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...(serverCfg.env || {}) },
+    });
+    let buffer = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      let idx = buffer.indexOf("\n");
+      while (idx >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf("\n");
+        if (!line) continue;
+        let msg = null;
+        try {
+          msg = JSON.parse(line);
+        } catch {}
+        if (!msg) continue;
+        if (msg.id === 1) {
+          // initialize response received, send tools/call
+          child.stdin.write(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: {
+                name: target.tool,
+                arguments: target.args || {},
+              },
+            }) + "\n",
+          );
+        } else if (msg.id === 2) {
+          // tools/call response received (was unparked by bridge respond)
+          child.kill("SIGTERM");
+          resolve(msg.result);
+        }
+      }
+    });
+    child.on("error", reject);
+    // Send initialize
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      }) + "\n",
+    );
+  });
 }
 
 const script = Array.isArray(scenario.script) ? scenario.script : [];
@@ -61,6 +181,15 @@ for (const step of script) {
     process.stderr.write(String(step.stderr));
   } else if (step.hang) {
     hang = true;
+  } else if (step.emit_argv) {
+    process.stdout.write(JSON.stringify({ type: "event", event: { type: "stub_argv", argv } }) + "\n");
+  } else if (Array.isArray(step.call_mcp_many)) {
+    const results = await Promise.all(step.call_mcp_many.map((target) => runMcpCall(target)));
+    if (process.env.CMD_STUB_MCP_RESULTS) {
+      fs.writeFileSync(process.env.CMD_STUB_MCP_RESULTS, JSON.stringify(results));
+    }
+  } else if (step.call_mcp) {
+    await runMcpCall(step.call_mcp);
   }
 }
 
