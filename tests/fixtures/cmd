@@ -34,7 +34,10 @@ if (scenarioPath) {
   }
 }
 
-const mcpStoreDir = path.join(tmpdir(), "cmd-stub-mcp-servers");
+// Per-sandbox store so tests never see each other's registrations.
+const mcpStoreDir = process.env.CMD_STUB_SCENARIO
+  ? path.join(path.dirname(process.env.CMD_STUB_SCENARIO), "mcp-servers")
+  : path.join(tmpdir(), "cmd-stub-mcp-servers");
 
 if (argv[0] === "mcp") {
   if (recordPath) {

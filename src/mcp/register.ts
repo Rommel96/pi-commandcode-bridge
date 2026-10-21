@@ -63,10 +63,30 @@ function runCli(bin: string, args: string[], env: NodeJS.ProcessEnv, cwd: string
 	});
 }
 
-/** Deterministic, collision-resistant config name bound to one conversation. */
+/**
+ * Deterministic, collision-resistant config name bound to one conversation and
+ * to the owning Pi process. The pid lets other sessions tell a live entry from
+ * a crashed leftover without touching it.
+ */
 export function mcpServerName(base: string): string {
 	const digest = createHash("sha256").update(base).digest("hex").slice(0, 8);
-	return `${MCP_NAME_PREFIX}${digest}`;
+	return `${MCP_NAME_PREFIX}${process.pid}-${digest}`;
+}
+
+/** Owner pid encoded in a bridge server name, or undefined for legacy names. */
+function ownerPid(name: string): number | undefined {
+	const match = /^(\d+)-[0-9a-f]+$/.exec(name.slice(MCP_NAME_PREFIX.length));
+	return match ? Number(match[1]) : undefined;
+}
+
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM: the process exists but belongs to someone else.
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
 }
 
 /**
@@ -103,9 +123,10 @@ function parseListRows(text: string): string[][] {
 }
 
 /**
- * Remove every local-scope server whose name starts with the bridge prefix —
- * leftovers of sessions that crashed without cleanup. Each entry is inert by
- * itself, but cleaning keeps `--resume` runs' MCP surfaces tidy.
+ * Remove local-scope bridge servers left by sessions that crashed without
+ * cleanup: entries whose owner process is gone, plus legacy names without an
+ * owner pid. Entries of live Pi processes (other sessions in the same project)
+ * are kept, otherwise concurrent sessions would delete each other's server.
  */
 export async function removeStaleBridgeServers(bin: string, env: NodeJS.ProcessEnv, cwd: string): Promise<void> {
 	const result = await runCli(bin, ["mcp", "list"], env, cwd, 30_000);
@@ -114,6 +135,8 @@ export async function removeStaleBridgeServers(bin: string, env: NodeJS.ProcessE
 	for (const cells of rows) {
 		const [name, , scope] = cells;
 		if (!name || !name.startsWith(MCP_NAME_PREFIX) || scope !== "local") continue;
+		const pid = ownerPid(name);
+		if (pid !== undefined && isAlive(pid)) continue;
 		await unregisterMcpServer(bin, env, name, cwd);
 	}
 }
