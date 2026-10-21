@@ -3,18 +3,32 @@ import { createHash } from "node:crypto";
 import {
 	createAssistantMessageEventStream,
 	getCurrentSystemPrompt,
+	getCurrentTools,
 	type Api,
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
+	type ToolCall,
 	type TranscriptContext,
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { resolveBin } from "./bin.js";
 import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
+import {
+	startBroker,
+	resultToMcpContent,
+	type Broker,
+	type BrokerCall,
+} from "./mcp/broker.js";
+import {
+	mcpServerName,
+	registerMcpServer,
+	unregisterMcpServer,
+	removeStaleBridgeServers,
+} from "./mcp/register.js";
 
 /** The provider request payload passed to `options.onPayload` (spec R6). */
 export interface CmdPayload {
@@ -37,7 +51,27 @@ interface BlockState {
 	started: boolean;
 }
 
-/** Custom `streamSimple` driving one `cmd -p` run per Pi request (spec R4-R6). */
+interface ActiveSession {
+	key: string;
+	child: ReturnType<typeof spawn>;
+	broker: Broker;
+	serverName: string;
+	bin: string;
+	env: Record<string, string>;
+	cwd: string;
+	stream: AssistantMessageEventStream;
+	blocks: BlockState;
+	finalize: (reason: "stop" | "error" | "aborted" | "toolUse", errorMessage?: string) => void;
+	options?: SimpleStreamOptions;
+	killTimer?: ReturnType<typeof setTimeout>;
+	toolUseTimer?: ReturnType<typeof setTimeout>;
+	turnFinished: boolean;
+	closed: boolean;
+}
+
+const activeSessions = new Map<string, ActiveSession>();
+
+/** Custom `streamSimple` driving one `cmd -p` run per Pi request (spec R4-R6, issue #1). */
 export function streamSimple(
 	model: Model<Api>,
 	context: TranscriptContext,
@@ -62,23 +96,107 @@ async function runCmdTurn(
 	};
 	let finished = false;
 
-	const finalize = (reason: "stop" | "error" | "aborted", errorMessage?: string): void => {
-		if (finished) return;
-		finished = true;
-		closeText(stream, blocks);
-		closeThinking(stream, blocks);
-		if (reason === "stop") {
-			blocks.partial.stopReason = "stop";
-			stream.push({ type: "done", reason: "stop", message: blocks.partial });
-		} else {
-			blocks.partial.stopReason = reason;
-			blocks.partial.errorMessage = errorMessage ?? "cmd run failed";
-			stream.push({ type: "error", reason, error: blocks.partial });
-		}
-		stream.end();
-	};
-
 	const key = conversationKey(context, options);
+	const tools = getCurrentTools(context.messages);
+
+	// -------------------------------------------------------------------------
+	// 1. Check for an active suspended session awaiting tool results
+	// -------------------------------------------------------------------------
+	const existing = activeSessions.get(key);
+	if (existing && !existing.closed) {
+		if (existing.broker.pending.length > 0) {
+			const toolResults = context.messages.filter(
+				(m): m is Extract<Message, { role: "toolResult" }> => m.role === "toolResult",
+			);
+			const hasMatchingResult = existing.broker.pending.some((call) =>
+				toolResults.some((tr) => tr.toolCallId === call.id || tr.toolName === call.name),
+			);
+			if (!hasMatchingResult) {
+				// Turn arrived without tool results: supersede previous run
+				existing.closed = true;
+				activeSessions.delete(key);
+				try {
+					existing.child.kill("SIGTERM");
+				} catch {
+					/* already gone */
+				}
+				existing.broker.close();
+				void unregisterMcpServer(existing.bin, existing.env, existing.serverName, existing.cwd);
+			} else {
+				// Re-attach to the suspended session
+				for (const call of [...existing.broker.pending]) {
+					const match = toolResults.find((tr) => tr.toolCallId === call.id || tr.toolName === call.name);
+					if (match) {
+						existing.broker.respond(call.id, {
+							content: resultToMcpContent(match.content),
+							isError: match.isError,
+						});
+					}
+				}
+
+				existing.stream = stream;
+				existing.blocks = blocks;
+				existing.options = options;
+				existing.turnFinished = false;
+
+				const turnFinalize = (reason: "stop" | "error" | "aborted" | "toolUse", errorMessage?: string): void => {
+					if (existing.turnFinished) return;
+					existing.turnFinished = true;
+					closeText(stream, blocks);
+					closeThinking(stream, blocks);
+					if (reason === "toolUse") {
+						blocks.partial.stopReason = "toolUse";
+						stream.push({ type: "done", reason: "toolUse", message: blocks.partial });
+					} else {
+						existing.closed = true;
+						activeSessions.delete(key);
+						existing.broker.close();
+						void unregisterMcpServer(existing.bin, existing.env, existing.serverName, existing.cwd);
+						if (reason === "stop") {
+							blocks.partial.stopReason = "stop";
+							stream.push({ type: "done", reason: "stop", message: blocks.partial });
+						} else {
+							blocks.partial.stopReason = reason;
+							blocks.partial.errorMessage = errorMessage ?? "cmd run failed";
+							stream.push({ type: "error", reason, error: blocks.partial });
+						}
+					}
+					stream.end();
+				};
+				existing.finalize = turnFinalize;
+
+				const signal = options?.signal;
+				if (signal?.aborted) {
+					turnFinalize("aborted", "Operation aborted");
+					try {
+						existing.child.kill("SIGTERM");
+					} catch {
+						/* already gone */
+					}
+					return;
+				}
+				if (signal) {
+					signal.addEventListener(
+						"abort",
+						() => {
+							turnFinalize("aborted", "Operation aborted");
+							try {
+								existing.child.kill("SIGTERM");
+							} catch {
+								/* already gone */
+							}
+						},
+						{ once: true },
+					);
+				}
+				return;
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// 2. Start a fresh run
+	// -------------------------------------------------------------------------
 	const bound = bindings.get(key);
 	const spec = specFor(model.id);
 	const effort = toCmdEffort(options?.reasoning, spec?.efforts ?? []);
@@ -115,23 +233,112 @@ async function runCmdTurn(
 		}
 	}
 
+	const finalize = (reason: "stop" | "error" | "aborted" | "toolUse", errorMessage?: string): void => {
+		const sess = activeSessions.get(key);
+		if (sess ? sess.turnFinished : finished) return;
+		if (sess) sess.turnFinished = true;
+		finished = true;
+		closeText(stream, blocks);
+		closeThinking(stream, blocks);
+		if (reason === "toolUse") {
+			blocks.partial.stopReason = "toolUse";
+			stream.push({ type: "done", reason: "toolUse", message: blocks.partial });
+		} else {
+			if (sess) {
+				sess.closed = true;
+				activeSessions.delete(key);
+				sess.broker.close();
+				void unregisterMcpServer(bin, env, sess.serverName, sess.cwd);
+			}
+			if (reason === "stop") {
+				blocks.partial.stopReason = "stop";
+				stream.push({ type: "done", reason: "stop", message: blocks.partial });
+			} else {
+				blocks.partial.stopReason = reason;
+				blocks.partial.errorMessage = errorMessage ?? "cmd run failed";
+				stream.push({ type: "error", reason, error: blocks.partial });
+			}
+		}
+		stream.end();
+	};
+
 	const signal = options?.signal;
 	if (signal?.aborted) {
 		finalize("aborted", "Operation aborted");
 		return;
 	}
 
+	const cwd = process.cwd();
+	let broker: Broker | undefined;
+	let serverName = "";
+
+	if (tools.length > 0) {
+		await removeStaleBridgeServers(bin, env, cwd);
+		serverName = mcpServerName(key);
+		broker = startBroker({
+			tools,
+			onCall: (call) => {
+				const sess = activeSessions.get(key);
+				if (!sess || sess.closed) return;
+				appendToolCall(sess.stream, sess.blocks, call);
+				if (sess.toolUseTimer) clearTimeout(sess.toolUseTimer);
+				sess.toolUseTimer = setTimeout(() => {
+					sess.finalize("toolUse");
+				}, 25);
+			},
+		});
+
+		const shimCfg = broker.shimCommand();
+		const reg = await registerMcpServer(
+			bin,
+			env,
+			serverName,
+			{ transport: "stdio", command: shimCfg.command, args: shimCfg.args, env: shimCfg.env },
+			cwd,
+		);
+		if (!reg.ok) {
+			broker.close();
+			finalize("error", `cannot register bridge MCP server: ${reg.error}`);
+			return;
+		}
+
+	}
+
 	let child;
 	try {
 		child = spawn(bin, payload.argv, {
-			cwd: process.cwd(),
+			cwd,
 			env,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 	} catch (error) {
+		if (broker) {
+			broker.close();
+			void unregisterMcpServer(bin, env, serverName, cwd);
+		}
 		finalize("error", `cannot start cmd: ${(error as Error).message}`);
 		return;
 	}
+
+	if (broker) {
+		const session: ActiveSession = {
+			key,
+			child,
+			broker,
+			serverName,
+			bin,
+			env,
+			cwd,
+			stream,
+			blocks,
+			finalize,
+			options,
+			turnFinished: false,
+			closed: false,
+		};
+		activeSessions.set(key, session);
+	}
+
 	// The prompt travels on stdin (F2): argv space is far too small for a
 	// system prompt plus transcript.
 	child.stdin?.on("error", () => {
@@ -150,6 +357,7 @@ async function runCmdTurn(
 	let resultLine: Record<string, any> | null = null;
 	let lastRequestUsage: Record<string, unknown> | undefined;
 	let runSessionId: string | undefined;
+
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
 		lineBuffer += chunk;
@@ -165,6 +373,11 @@ async function runCmdTurn(
 	});
 
 	const processLines = async (lines: string[]): Promise<void> => {
+		const sess = activeSessions.get(key);
+		const curStream = sess ? sess.stream : stream;
+		const curBlocks = sess ? sess.blocks : blocks;
+		const curOptions = sess ? sess.options : options;
+
 		for (const raw of lines) {
 			const line = raw.trim();
 			if (!line) continue;
@@ -174,8 +387,8 @@ async function runCmdTurn(
 			} catch {
 				continue;
 			}
-			await options?.onProviderStreamEvent?.(parsed, model);
-			if (finished) continue;
+			await curOptions?.onProviderStreamEvent?.(parsed, model);
+			if (sess ? sess.turnFinished : finished) continue;
 			if (parsed.type === "result") {
 				resultLine = parsed;
 				continue;
@@ -194,19 +407,30 @@ async function runCmdTurn(
 					}
 					break;
 				case "text_delta":
-					appendText(stream, blocks, String(event.delta ?? ""));
+					appendText(curStream, curBlocks, String(event.delta ?? ""));
 					break;
-				case "tool_queued":
+				case "tool_queued": {
+					const toolName = String(event.toolName ?? "tool");
+					if (
+						serverName &&
+						(toolName.startsWith(`mcp__${serverName}`) ||
+							toolName.startsWith("mcp__pi_cmd_bridge") ||
+							toolName.startsWith("mcp__pi-cmd-bridge"))
+					) {
+						// Bridged MCP tool: will be handled via broker onCall
+						break;
+					}
 					appendThinking(
-						stream,
-						blocks,
-						`[cmd tool: ${event.toolName ?? "tool"} ${formatToolDetail(event.input)}]`,
+						curStream,
+						curBlocks,
+						`[cmd tool: ${toolName} ${formatToolDetail(event.input)}]`,
 					);
 					break;
+				}
 				case "tool_hook_blocked":
 					appendThinking(
-						stream,
-						blocks,
+						curStream,
+						curBlocks,
 						`[cmd blocked: ${event.toolName ?? "tool"}: ${String(event.hookOutput ?? "").trim()}]`,
 					);
 					break;
@@ -238,14 +462,21 @@ async function runCmdTurn(
 		finalize("error", `cannot start cmd: ${error.message}`);
 	});
 	child.on("spawn", () => {
-		if (!finished) ensureStarted(stream, blocks);
+		const sess = activeSessions.get(key);
+		const curStream = sess ? sess.stream : stream;
+		const curBlocks = sess ? sess.blocks : blocks;
+		if (!finished) ensureStarted(curStream, curBlocks);
 	});
 	child.on("close", (code: number | null) => {
 		if (killTimer) clearTimeout(killTimer);
 		signal?.removeEventListener("abort", onAbort);
 		void (async () => {
 			await processing;
-			if (finished) return;
+			const sess = activeSessions.get(key);
+			const curStream = sess ? sess.stream : stream;
+			const curBlocks = sess ? sess.blocks : blocks;
+			const curFinalize = sess ? sess.finalize : finalize;
+
 			const ok = code === 0 && resultLine !== null && resultLine.subtype === "success";
 			if (ok) {
 				const sessionId = resultLine.sessionId ?? runSessionId;
@@ -253,21 +484,21 @@ async function runCmdTurn(
 				// F3: a run that emitted only thinking must still surface
 				// finalText as text before done.
 				const finalText = typeof resultLine.finalText === "string" ? resultLine.finalText : "";
-				const hasText = blocks.partial.content.some(
+				const hasText = curBlocks.partial.content.some(
 					(b) => b.type === "text" && b.text.length > 0,
 				);
 				if (!hasText && finalText) {
-					appendText(stream, blocks, finalText);
+					appendText(curStream, curBlocks, finalText);
 				}
-				blocks.partial.usage = toPiUsage(lastRequestUsage ?? resultLine.usage);
-				finalize("stop");
+				curBlocks.partial.usage = toPiUsage(lastRequestUsage ?? resultLine.usage);
+				curFinalize("stop");
 				return;
 			}
 			const exitDesc = code === null ? "killed" : `exit ${code}`;
 			let message = resultLine ? `cmd failed (${exitDesc})` : `cmd produced no result (${exitDesc})`;
 			const tail = stderrTail.trim();
 			if (tail) message += `\n${tail}`;
-			finalize("error", message);
+			curFinalize("error", message);
 		})();
 	});
 }
@@ -314,6 +545,9 @@ function childEnv(options?: SimpleStreamOptions): Record<string, string> {
 		}
 	}
 	env.CMD_HERDR = "0";
+	if (!env.MCP_TOOL_TIMEOUT) {
+		env.MCP_TOOL_TIMEOUT = "600000";
+	}
 	return env;
 }
 
@@ -385,6 +619,28 @@ function appendThinking(stream: AssistantMessageEventStream, b: BlockState, delt
 		delta,
 		partial: b.partial,
 	});
+}
+
+function appendToolCall(stream: AssistantMessageEventStream, b: BlockState, call: BrokerCall): void {
+	closeText(stream, b);
+	closeThinking(stream, b);
+	ensureStarted(stream, b);
+	const toolCall: ToolCall = {
+		type: "toolCall",
+		id: call.id,
+		name: call.name,
+		arguments: call.arguments,
+	};
+	b.partial.content.push(toolCall);
+	const contentIndex = b.partial.content.length - 1;
+	stream.push({ type: "toolcall_start", contentIndex, partial: b.partial });
+	stream.push({
+		type: "toolcall_delta",
+		contentIndex,
+		delta: JSON.stringify(call.arguments),
+		partial: b.partial,
+	});
+	stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: b.partial });
 }
 
 function ensureTextOpen(stream: AssistantMessageEventStream, b: BlockState): void {
