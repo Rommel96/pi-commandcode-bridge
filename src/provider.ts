@@ -339,6 +339,7 @@ async function runCmdTurn(
 	}
 
 	if (broker) {
+		broker.bindChild(child.pid);
 		const session: ActiveSession = {
 			key,
 			child,

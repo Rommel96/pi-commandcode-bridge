@@ -51,6 +51,12 @@ export interface Broker {
 	readonly socketPath: string;
 	/** Command, args and env for the MCP stdio config; env points at the socket and the tools file. */
 	shimCommand(): { command: string; args: string[]; env: Record<string, string> };
+	/**
+	 * Accept calls only from shims spawned by this `cmd` child. cmd's local MCP
+	 * scope is shared per project, so a concurrent session's cmd also spawns
+	 * this broker's shim; until bound, every call is refused.
+	 */
+	bindChild(pid: number | undefined): void;
 	/** Settle one parked call. No-op for unknown ids. */
 	respond(id: string, result: IpcBrokerResult): void;
 	/** Settle every parked call as an error (abort, superseded turn, teardown). */
@@ -96,8 +102,12 @@ export function startBroker(options: BrokerOptions): Broker {
 	const pending: BrokerCall[] = [];
 	/** Per-run secret the shim must send with every frame. */
 	const token = randomBytes(32).toString("base64url");
+	let childPid: number | undefined;
 
 	const ipcServer: IpcServer = startIpcServer(socketPath, (call) => {
+		if (childPid === undefined || call.ppid !== childPid) {
+			return errorResult("this tool belongs to another Pi session; use the tools of your own bridge server");
+		}
 		const id = `picc-${randomBytes(6).toString("base64url")}`;
 		ids.set(id, call.id);
 		pending.push({ id, name: piToolName(call.name), arguments: call.arguments });
@@ -125,6 +135,9 @@ export function startBroker(options: BrokerOptions): Broker {
 				args: [shimPath()],
 				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS_FILE: toolsFile, PICC_SHIM_TOKEN: token },
 			};
+		},
+		bindChild: (pid) => {
+			childPid = pid;
 		},
 		respond: (id, result: IpcBrokerResult) => {
 			const frameId = ids.get(id);

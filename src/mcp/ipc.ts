@@ -29,6 +29,8 @@ export interface IpcBrokerCall {
 	id: string;
 	name: string;
 	arguments: Record<string, unknown>;
+	/** Parent pid of the shim: the `cmd` process that spawned it. */
+	ppid?: number;
 }
 
 export interface IpcBrokerResult {
@@ -126,7 +128,8 @@ export function startIpcServer(path: string, handler: IpcRouteHandler, options: 
 		};
 		parked.set(id, settle);
 		try {
-			void Promise.resolve(handler({ kind: "call", v: 1, id, name, arguments: args })).then(settle, (error: unknown) => {
+			const ppid = typeof parsed.ppid === "number" ? parsed.ppid : undefined;
+			void Promise.resolve(handler({ kind: "call", v: 1, id, name, arguments: args, ppid })).then(settle, (error: unknown) => {
 				settle({
 					content: [{ type: "text", text: `bridge failure: ${String((error as Error)?.message ?? error)}` }],
 					isError: true,
