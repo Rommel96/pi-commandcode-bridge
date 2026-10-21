@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { normalizeContext } from "@earendil-works/pi-ai";
@@ -45,8 +45,15 @@ export interface StubScenario {
 	ignoreSigterm?: boolean;
 }
 
+// Distinct prefix from the broker's run dirs; removed when the test process exits.
+const sandboxes: string[] = [];
+export function removeSandboxes(): void {
+	for (const dir of sandboxes.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
 export function sandbox(): Sandbox {
-	const dir = mkdtempSync(path.join(tmpdir(), "pi-cmd-bridge-"));
+	const dir = mkdtempSync(path.join(tmpdir(), "pi-cmd-bridge-test-"));
+	sandboxes.push(dir);
 	return { dir, recordFile: path.join(dir, "record.json"), scenarioFile: path.join(dir, "scenario.json") };
 }
 
