@@ -178,6 +178,8 @@ for (const step of script) {
     process.stderr.write(String(step.stderr));
   } else if (step.hang) {
     hang = true;
+  } else if (step.emit_argv) {
+    process.stdout.write(JSON.stringify({ type: "event", event: { type: "stub_argv", argv } }) + "\n");
   } else if (step.call_mcp) {
     await runMcpCall(step.call_mcp);
   }

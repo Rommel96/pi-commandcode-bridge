@@ -111,6 +111,13 @@ When a model running through `pi-commandcode-bridge` is used as an orchestrator 
 
 Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) continue running in-process inside `cmd` and display as thinking blocks (`[cmd tool: ...]`).
 
+`cmd` also ships a built-in `agent` tool. When Pi's `subagent_run` is among the
+exposed tools, the bridge generates a small `cmd` mod that blocks `agent` and tells
+the model to use the bridged `mcp__<server>__subagent_run` instead, so the subagent
+runs in the Pi host and stays visible to the host (for example in Gentle-Shell's
+agent list). Set `CMDCODE_BRIDGE_NATIVE_AGENT=allow` to keep `cmd`'s native agents
+available and skip the guard.
+
 ## Configuration
 
 | Variable | Purpose |
@@ -121,6 +128,7 @@ Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) cont
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
 | `CMDCODE_BRIDGE_CACHE` | Cache file path |
 | `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
+| `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
 | `MCP_TOOL_TIMEOUT` | Tool execution timeout in ms passed to `cmd` (default: `600000` / 10 min) |
 

@@ -29,6 +29,7 @@ import {
 	unregisterMcpServer,
 	removeStaleBridgeServers,
 } from "./mcp/register.js";
+import { writeSteeringMod } from "./mcp/steering.js";
 
 /** The provider request payload passed to `options.onPayload` (spec R6). */
 export interface CmdPayload {
@@ -302,6 +303,22 @@ async function runCmdTurn(
 			return;
 		}
 
+		// cmd always exposes its native `agent` tool, and it wins over the MCP
+		// subagent_run often enough to be a problem: that subagent runs inside
+		// cmd, so the Pi host never sees it. Block it with a generated mod and
+		// hand the model the exact MCP name to use instead. Users who prefer
+		// cmd's native agents can opt out with CMDCODE_BRIDGE_NATIVE_AGENT=allow.
+		if (tools.some((tool) => tool.name === "subagent_run") && env.CMDCODE_BRIDGE_NATIVE_AGENT !== "allow") {
+			try {
+				const modPath = writeSteeringMod(broker.dir, serverName);
+				payload = { ...payload, argv: [...payload.argv, "--mod", modPath] };
+			} catch (error) {
+				broker.close();
+				void unregisterMcpServer(bin, env, serverName, cwd);
+				finalize("error", `cannot write delegation guard: ${(error as Error).message}`);
+				return;
+			}
+		}
 	}
 
 	let child;
