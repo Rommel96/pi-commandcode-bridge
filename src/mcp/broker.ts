@@ -8,7 +8,7 @@
  * one into a Pi `toolCall` block and ends the turn with `stopReason: "toolUse"`.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +49,7 @@ export interface Broker {
 	readonly dir: string;
 	/** The endpoint the shim connects to (unix socket file, or pipe name). */
 	readonly socketPath: string;
-	/** Command, args and env for the MCP stdio config; the socket and tools travel in env. */
+	/** Command, args and env for the MCP stdio config; env points at the socket and the tools file. */
 	shimCommand(): { command: string; args: string[]; env: Record<string, string> };
 	/** Settle one parked call. No-op for unknown ids. */
 	respond(id: string, result: IpcBrokerResult): void;
@@ -115,11 +115,15 @@ export function startBroker(options: BrokerOptions): Broker {
 		dir,
 		socketPath,
 		shimCommand: () => {
-			const toolsB64 = Buffer.from(JSON.stringify(toolDefs(tools)), "utf8").toString("base64");
+			// Schemas go through a private file, not env: Linux caps each env/argv
+			// string at 128 KiB, and this config also travels as one
+			// `cmd mcp add-json` argument.
+			const toolsFile = path.join(dir, "tools.json");
+			writeFileSync(toolsFile, JSON.stringify(toolDefs(tools)), { mode: 0o600 });
 			return {
 				command: options.runtime ?? shimRuntime(),
 				args: [shimPath()],
-				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS: toolsB64, PICC_SHIM_TOKEN: token },
+				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS_FILE: toolsFile, PICC_SHIM_TOKEN: token },
 			};
 		},
 		respond: (id, result: IpcBrokerResult) => {
