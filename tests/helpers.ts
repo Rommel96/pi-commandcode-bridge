@@ -57,6 +57,9 @@ export function setScenario(sb: Sandbox, scenario: StubScenario): void {
 /** Env for the child: points at the stub and its record/scenario files. */
 export function stubEnv(sb: Sandbox, extra: Record<string, string> = {}): Record<string, string> {
 	return {
+		// The stub's `#!/usr/bin/env node` shebang needs PATH to find node; without it
+		// only systems with node in the default PATH (e.g. /usr/bin on Linux) pass.
+		PATH: process.env.PATH ?? "",
 		CMDCODE_BRIDGE_BIN: STUB_BIN,
 		CMD_STUB_RECORD: sb.recordFile,
 		CMD_STUB_SCENARIO: sb.scenarioFile,
