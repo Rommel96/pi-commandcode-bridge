@@ -118,6 +118,11 @@ runs in the Pi host and stays visible to the host (for example in Gentle-Shell's
 agent list). Set `CMDCODE_BRIDGE_NATIVE_AGENT=allow` to keep `cmd`'s native agents
 available and skip the guard.
 
+Task-mode subagents can run for many minutes, so the bridge sets the child's
+`MCP_TOOL_TIMEOUT` to at least 30 minutes. The host may also serialize task-mode
+subagents; use the tool's background mode when several need to overlap, then collect
+them by task id.
+
 ## Configuration
 
 | Variable | Purpose |
@@ -130,7 +135,8 @@ available and skip the guard.
 | `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
 | `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
-| `MCP_TOOL_TIMEOUT` | Tool execution timeout in ms passed to `cmd` (default: `600000` / 10 min) |
+| `CMDCODE_BRIDGE_MCP_TIMEOUT` | Exact MCP timeout in ms for the `cmd` child (default: `1800000` / 30 min) |
+| `MCP_TOOL_TIMEOUT` | Lower values are raised to 30 min so long subagent calls survive the model turn plus the subagent execution |
 
 `CMD_HERDR=0` is always set for the child, so `cmd`'s built-in Herdr reporting
 cannot replace the agent that Herdr tracks for the Pi pane.

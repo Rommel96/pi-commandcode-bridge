@@ -563,8 +563,19 @@ function childEnv(options?: SimpleStreamOptions): Record<string, string> {
 		}
 	}
 	env.CMD_HERDR = "0";
-	if (!env.MCP_TOOL_TIMEOUT) {
-		env.MCP_TOOL_TIMEOUT = "600000";
+	// A task-mode subagent_run can outlive cmd's 80s MCP default by many
+	// minutes, and Pi may pass its own MCP_TOOL_TIMEOUT through options.env.
+	// Raise the value instead of only filling it in when absent; the bridge
+	// variable is the exact override for callers that need a different bound.
+	const bridgeTimeout = Number(env.CMDCODE_BRIDGE_MCP_TIMEOUT);
+	if (Number.isFinite(bridgeTimeout) && bridgeTimeout > 0) {
+		env.MCP_TOOL_TIMEOUT = String(bridgeTimeout);
+	} else {
+		const ambient = Number(env.MCP_TOOL_TIMEOUT);
+		const minimum = 1_800_000;
+		env.MCP_TOOL_TIMEOUT = String(
+			Number.isFinite(ambient) && ambient > 0 ? Math.max(ambient, minimum) : minimum,
+		);
 	}
 	return env;
 }

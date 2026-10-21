@@ -76,6 +76,29 @@ test("child env has CMD_HERDR=0 and inherits the environment (item 9)", async ()
 	const rec = await waitForRecord(sb);
 	expect(rec.env.CMD_HERDR).toBe("0");
 	expect(rec.env.CMDBRIDGE_TEST_INHERIT).toBe("inherited-value");
+	expect(rec.env.MCP_TOOL_TIMEOUT).toBe("1800000");
+});
+
+test("a lower ambient MCP_TOOL_TIMEOUT is raised for long bridged calls", async () => {
+	const sb = sandbox();
+	setScenario(sb, okScenario("S4b"));
+	await runTurn(testModel(MODEL_ID), "S", [userMsg("q")], {
+		env: stubEnv(sb, { MCP_TOOL_TIMEOUT: "80000" }),
+		sessionId: "argv-4b",
+	});
+	const rec = await waitForRecord(sb);
+	expect(rec.env.MCP_TOOL_TIMEOUT).toBe("1800000");
+});
+
+test("CMDCODE_BRIDGE_MCP_TIMEOUT is the exact timeout override", async () => {
+	const sb = sandbox();
+	setScenario(sb, okScenario("S4c"));
+	await runTurn(testModel(MODEL_ID), "S", [userMsg("q")], {
+		env: stubEnv(sb, { MCP_TOOL_TIMEOUT: "80000", CMDCODE_BRIDGE_MCP_TIMEOUT: "2400000" }),
+		sessionId: "argv-4c",
+	});
+	const rec = await waitForRecord(sb);
+	expect(rec.env.MCP_TOOL_TIMEOUT).toBe("2400000");
 });
 
 test("onPayload receives the argv and prompt; a replacement payload is used", async () => {
