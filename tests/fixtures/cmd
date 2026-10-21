@@ -180,6 +180,11 @@ for (const step of script) {
     hang = true;
   } else if (step.emit_argv) {
     process.stdout.write(JSON.stringify({ type: "event", event: { type: "stub_argv", argv } }) + "\n");
+  } else if (Array.isArray(step.call_mcp_many)) {
+    const results = await Promise.all(step.call_mcp_many.map((target) => runMcpCall(target)));
+    if (process.env.CMD_STUB_MCP_RESULTS) {
+      fs.writeFileSync(process.env.CMD_STUB_MCP_RESULTS, JSON.stringify(results));
+    }
   } else if (step.call_mcp) {
     await runMcpCall(step.call_mcp);
   }

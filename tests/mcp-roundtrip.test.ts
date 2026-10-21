@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { normalizeContext, type Tool } from "@earendil-works/pi-ai";
+import path from "node:path";
+import { normalizeContext, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import {
 	collectEvents,
 	resultLine,
@@ -203,6 +204,64 @@ test("runs without subagent_run do not add the guard mod", async () => {
 	expect(events.some((e) => e.type === "done")).toBe(true);
 	expect(seenArgv).toHaveLength(1);
 	expect(seenArgv[0]).not.toContain("--mod");
+});
+
+test("three parallel same-name calls keep their own results", async () => {
+	const sb = sandbox();
+	const resultsFile = path.join(sb.dir, "mcp-results.json");
+	setScenario(sb, {
+		script: [
+			{ emit: runStart("S-PARALLEL") },
+			{
+				call_mcp_many: [
+					{ serverPrefix: "pi-cmd-bridge-", tool: "subagent_run", args: { task: "one" } },
+					{ serverPrefix: "pi-cmd-bridge-", tool: "subagent_run", args: { task: "two" } },
+					{ serverPrefix: "pi-cmd-bridge-", tool: "subagent_run", args: { task: "three" } },
+				],
+			},
+			{ emit: textDelta("ALL-DONE") },
+			{ emit: resultLine("S-PARALLEL", "ALL-DONE") },
+		],
+	});
+
+	const context = normalizeContext({
+		systemPrompt: "S",
+		messages: [userMsg("q")],
+		tools: [SUBAGENT_TOOL],
+	});
+	const env = stubEnv(sb, { CMD_STUB_MCP_RESULTS: resultsFile });
+	const events = await collectEvents(
+		streamSimple(testModel(MODEL_ID), context, { env, sessionId: "parallel-session" }),
+	);
+
+	const done = events.find((e) => e.type === "done");
+	if (!done || done.type !== "done") throw new Error("expected done toolUse event");
+	expect(done.reason).toBe("toolUse");
+	const calls = done.message.content.filter((b): b is ToolCall => b.type === "toolCall");
+	expect(calls).toHaveLength(3);
+
+	const texts = ["RESULT-ONE", "RESULT-TWO", "RESULT-THREE"];
+	const turn2Messages = [
+		...context.messages,
+		done.message,
+		...calls.map((call, index) => toolResultMsg("subagent_run", texts[index]!, call.id)),
+	];
+	const events2 = await collectEvents(
+		streamSimple(
+			testModel(MODEL_ID),
+			normalizeContext({ systemPrompt: "S", messages: turn2Messages, tools: [SUBAGENT_TOOL] }),
+			{ env, sessionId: "parallel-session" },
+		),
+	);
+	const done2 = events2.find((e) => e.type === "done");
+	expect(done2?.type === "done" && done2.reason).toBe("stop");
+
+	const results = JSON.parse(readFileSync(resultsFile, "utf8")) as Array<{
+		content: Array<{ text: string }>;
+	}>;
+	expect(results).toHaveLength(3);
+	const received = results.map((result) => result.content.map((block) => block.text).join(""));
+	expect(received.sort()).toEqual([...texts].sort());
 });
 
 test("empty tools array runs direct without MCP registration", async () => {

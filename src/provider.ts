@@ -29,6 +29,7 @@ import {
 	unregisterMcpServer,
 	removeStaleBridgeServers,
 } from "./mcp/register.js";
+import { matchToolResult } from "./mcp/results.js";
 import { writeSteeringMod } from "./mcp/steering.js";
 
 /** The provider request payload passed to `options.onPayload` (spec R6). */
@@ -109,8 +110,8 @@ async function runCmdTurn(
 			const toolResults = context.messages.filter(
 				(m): m is Extract<Message, { role: "toolResult" }> => m.role === "toolResult",
 			);
-			const hasMatchingResult = existing.broker.pending.some((call) =>
-				toolResults.some((tr) => tr.toolCallId === call.id || tr.toolName === call.name),
+			const hasMatchingResult = existing.broker.pending.some(
+				(call) => matchToolResult(call, existing.broker.pending, toolResults) !== undefined,
 			);
 			if (!hasMatchingResult) {
 				// Turn arrived without tool results: supersede previous run
@@ -126,7 +127,7 @@ async function runCmdTurn(
 			} else {
 				// Re-attach to the suspended session
 				for (const call of [...existing.broker.pending]) {
-					const match = toolResults.find((tr) => tr.toolCallId === call.id || tr.toolName === call.name);
+					const match = matchToolResult(call, existing.broker.pending, toolResults);
 					if (match) {
 						existing.broker.respond(call.id, {
 							content: resultToMcpContent(match.content),

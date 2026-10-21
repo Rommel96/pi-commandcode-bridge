@@ -143,10 +143,10 @@ export function assistantMsg(text: string): Message {
 	return message;
 }
 
-export function toolResultMsg(toolName: string, text: string): Message {
+export function toolResultMsg(toolName: string, text: string, toolCallId = `call-${toolName}`): Message {
 	return {
 		role: "toolResult",
-		toolCallId: `call-${toolName}`,
+		toolCallId,
 		toolName,
 		content: [{ type: "text", text }],
 		isError: false,
