@@ -25,6 +25,7 @@ import {
 } from "./mcp/broker.js";
 import {
 	mcpServerName,
+	MCP_NAME_PREFIX,
 	registerMcpServer,
 	unregisterMcpServer,
 	removeStaleBridgeServers,
@@ -430,12 +431,8 @@ async function runCmdTurn(
 					break;
 				case "tool_queued": {
 					const toolName = String(event.toolName ?? "tool");
-					if (
-						serverName &&
-						(toolName.startsWith(`mcp__${serverName}`) ||
-							toolName.startsWith("mcp__pi_cmd_bridge") ||
-							toolName.startsWith("mcp__pi-cmd-bridge"))
-					) {
+					// cmd names MCP tools `mcp__<server>__<tool>` with the server name verbatim.
+					if (serverName && toolName.startsWith(`mcp__${MCP_NAME_PREFIX}`)) {
 						// Bridged MCP tool: will be handled via broker onCall
 						break;
 					}
