@@ -4,7 +4,8 @@ A [Pi](https://pi.dev) provider that runs [Command Code](https://commandcode.ai)
 models through the **`cmd` CLI** instead of the HTTP Provider API.
 
 Pick it when your Command Code plan can run the CLI but has no API access (the Go
-plan, for example). If you have API access, the API-based providers are simpler.
+plan, for example), or when you want a Command Code model to orchestrate Pi
+subagents from inside `cmd`'s own agent loop.
 
 - Every request is one `cmd -p` run; later turns resume the same `cmd` session.
 - Pi tools and subagent orchestration (`subagent_run`) are exposed to `cmd` via
@@ -31,22 +32,30 @@ CLI you are already signed in to, so it works on every plan.
 | Works on the Go plan | yes | no |
 | Credentials | none beyond `cmd login` | an API key |
 | Model list | discovered live from `cmd --list-models` | read from the API |
+| Agent loop | `cmd`'s own (native tools, mods, `cmd` sessions) | Pi's |
+| Pi tools inside `cmd`'s loop | bridged over MCP, including `subagent_run` | n/a |
 
-Two choices make the difference beyond the transport:
+As of this release, the other Command Code packages for Pi on npm
+(`@commandcode/pi-commandcode-provider`, `pi-commandcode-provider`,
+`@bacnh85/pi-commandcode`, `@arhen/pi-add-commandcode`) all use the HTTP Provider
+API; none of them drives the CLI.
+
+Three choices make the difference beyond the transport:
 
 - **Probing instead of static tables.** When `cmd` rejects a bogus `--effort` it
   names the exact levels a model accepts — before calling the model and without
   billing. Discovery records that answer per model, so Pi's thinking levels land
   on values the model really supports and new models work on day one.
+- **Pi tools inside `cmd`.** Host Pi tools (such as `subagent_run` or harness
+  tools) are bridged into `cmd` through an ephemeral stdio MCP shim, so a Command
+  Code model can act as the root orchestrator of Pi subagent sessions (see Tool
+  delegation).
 - **An honest trade-off.** `cmd` runs its own agent loop and ships its own system
-  prompt (about 16,600 input tokens per run); native `cmd` tool activity is shown as thinking
-  text (`[cmd tool: ...]`). Host Pi tools (such as `subagent_run` or harness tools) are bridged
-  bidirectionally via an ephemeral in-process MCP server, allowing models to act as root
-  orchestrators across subagent sessions (see Tool Delegation).
+  prompt (about 16,600 input tokens per run); native `cmd` tool activity is shown as
+  thinking text (`[cmd tool: ...]`).
 
-If you have API access, an API-based provider is still the better fit there: no
-extra system prompt per run and Pi's own tools work. Use this one where the API
-does not.
+If you have API access and do not need `cmd`'s agent loop, an API-based provider is
+still the leaner fit: no extra system prompt per run and Pi drives tools directly.
 
 ## Requirements
 
@@ -59,7 +68,7 @@ does not.
 
 ```bash
 pi install git:github.com/Rommel96/pi-commandcode-bridge # straight from GitHub, no clone needed
-pi install npm:pi-commandcode-bridge                     # once published
+pi install npm:pi-commandcode-bridge
 pi install /path/to/pi-commandcode-bridge                # from a checkout
 ```
 
@@ -107,7 +116,15 @@ When a model running through `pi-commandcode-bridge` is used as an orchestrator 
 1. **Ephemeral MCP Server**: The bridge starts an in-process broker and registers an ephemeral stdio MCP shim (`shim.js`) with `cmd` using machine-private local scope (`~/.commandcode/projects/<slug>/mcp.json`).
 2. **Suspension & Yielding**: When the model invokes a bridged tool (such as `subagent_run`), the shim forwards the call over a unix socket to the broker and parks the execution. The bridge concludes the Pi turn with `stopReason: "toolUse"` and emits the corresponding `toolCall` events to Pi.
 3. **Resumption**: Pi executes the tool (e.g. launching a subagent), returns the output via `toolResult` on the subsequent turn, which unblocks the parked MCP call. `cmd` continues streaming reasoning and final text.
-4. **Cleanup**: When the conversation finishes or aborts, the MCP registration and unix socket are cleanly dismantled.
+4. **Cleanup**: When the conversation finishes or aborts, the MCP registration and unix socket are removed. If Pi is killed before that, the leftover registration is removed by the next run in the same project once its owning process is gone; registrations of other live Pi sessions are kept.
+
+The broker only serves its own run: every frame must carry a per-run random token,
+results go back only to the connection that made the call, and calls from a `cmd`
+process other than the run's own child are refused. That last check matters because
+`cmd`'s local MCP scope is shared by every session in the same project, so a
+concurrent session's `cmd` also starts this run's shim. Tool schemas reach the shim
+through a `0600` file in the run's private temp directory, not the environment, so
+large tool sets stay below Linux's 128 KiB per-string `execve` limit.
 
 Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) continue running in-process inside `cmd` and display as thinking blocks (`[cmd tool: ...]`).
 
