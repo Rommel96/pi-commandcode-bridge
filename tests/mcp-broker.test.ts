@@ -52,7 +52,7 @@ class RawShim {
 	}
 	call(name: string, args: unknown, id?: string): void {
 		const frameId = id ?? `frame-${nextFrameSeq++}`;
-		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args, token: this.token }) + "\n");
+		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args, token: this.token, ppid: process.pid }) + "\n");
 	}
 	reply(msTimeout = 5000): Promise<Record<string, any> | null> {
 		return new Promise((resolve) => {
@@ -79,6 +79,7 @@ class RawShim {
 
 test("broker exposes shim spawn args with the tool definitions base64-encoded", () => {
 	const broker = startBroker({ tools: TOOLS, onCall: () => {} });
+	broker.bindChild(process.pid);
 	try {
 		const { command, args, env } = broker.shimCommand();
 		expect(command).toBe(shimRuntime());
@@ -108,6 +109,7 @@ test("shim runtime falls back to node when process.execPath is Pi's binary", () 
 test("broker parks calls, de-mangles the MCP tool name and resolves via respond", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
+	broker.bindChild(process.pid);
 	const socketPath = broker.socketPath;
 	const shim = new RawShim(socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 	try {
@@ -140,6 +142,7 @@ test("broker parks calls, de-mangles the MCP tool name and resolves via respond"
 test("broker rejects every parked call on rejectAll", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
+	broker.bindChild(process.pid);
 	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
 	try {
 		await new Promise((r) => setTimeout(r, 60));
@@ -168,6 +171,7 @@ test("broker rejects every parked call on rejectAll", async () => {
 test("a completed broker cannot reach out: respond is a no-op after close", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
+	broker.bindChild(process.pid);
 	const socketPath = broker.socketPath;
 	await new Promise((r) => setTimeout(r, 60));
 	broker.close();
@@ -199,6 +203,7 @@ test("resultToMcpContent flattens tool result bodies for MCP", () => {
 
 test("respond with an unknown id is a no-op", () => {
 	const broker = startBroker({ tools: TOOLS, onCall: () => {} });
+	broker.bindChild(process.pid);
 	try {
 		expect(broker.pending).toHaveLength(0);
 		broker.respond("never-a-call", { content: [{ type: "text", text: "x" }], isError: false });

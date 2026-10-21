@@ -158,7 +158,7 @@ class RouterLink {
 		const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 		return new Promise((resolve) => {
 			this.#parked.set(id, resolve);
-			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args, token: this.#token }) + "\n");
+			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args, token: this.#token, ppid: process.ppid }) + "\n");
 		});
 	}
 
