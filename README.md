@@ -188,7 +188,8 @@ system prompt and the transcript; later ones send only the new messages with
 - **Sessions bind in memory:** restarting Pi starts new `cmd` conversations.
 - `options.onResponse` is not called (a child process has no HTTP response); only
   `onPayload` and `onProviderStreamEvent` are honored.
-- **Windows is untested.**
+- **Windows is untested.** Plain chat is expected to work through `cmdc`; tool
+  delegation (the MCP broker) is known not to work on Windows yet.
 - Prompts, keys and provider payloads are never logged. The cache holds model ids,
   descriptions and effort levels only.
 
