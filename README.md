@@ -161,6 +161,7 @@ them by task id.
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
 | `CMDCODE_BRIDGE_CACHE` | Cache file path |
 | `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
+| `CMDCODE_BRIDGE_CMD_SKILLS=1` | Let `cmd` discover and list its own skills (skipped by default with `--no-skills`, see Repeated context) |
 | `CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` | Keep the `Co-authored-by: CommandCodeBot` commit trailer that `cmd` injects (removed by default, see Commit attribution) |
 | `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
@@ -180,11 +181,19 @@ removes exactly that trailer from tool inputs before the tool executes. Other
 `Co-authored-by` trailers are never touched. Set
 `CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` to leave the trailer in place.
 
+### Repeated context
+
+Pi already sends its own system prompt, skills included, to `cmd`. On top of that
+`cmd` adds a catalog of the skills it discovers, so the bridge passes `--no-skills`:
+measured on a real run, the first request drops from about 28,100 to 21,800 input
+tokens, and the saving repeats on every internal request of a run. Skills passed with
+`cmd --skill` still load. Set `CMDCODE_BRIDGE_CMD_SKILLS=1` to keep `cmd`'s catalog.
+
 ## How a request runs
 
 ```
 cmd -p --output-format json --skip-onboarding --trust -m <model> \
-    [--effort <level>] [--resume <session>] [--yolo] [--mod <attribution>]      (prompt on stdin)
+    [--effort <level>] [--resume <session>] [--yolo] [--mod <attribution>] [--no-skills]      (prompt on stdin)
 ```
 
 `cmd`'s NDJSON stream becomes Pi events: text deltas become text; native `cmd`

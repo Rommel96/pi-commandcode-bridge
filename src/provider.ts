@@ -230,6 +230,9 @@ async function runCmdTurn(
 	if (env.CMDCODE_BRIDGE_YOLO !== "0") argv.push("--yolo");
 	// Strips cmd's injected "Co-authored-by: CommandCodeBot" commit trailer.
 	argv.push(...attributionArgs(env));
+	// Pi already hands cmd its own skills in the system prompt; cmd's catalog
+	// repeats ~6K tokens per request. CMDCODE_BRIDGE_CMD_SKILLS=1 keeps it.
+	if (env.CMDCODE_BRIDGE_CMD_SKILLS !== "1") argv.push("--no-skills");
 
 	let payload: CmdPayload = { argv, prompt };
 	if (options?.onPayload) {
