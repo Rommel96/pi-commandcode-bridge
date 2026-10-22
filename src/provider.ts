@@ -14,6 +14,7 @@ import {
 	type TranscriptContext,
 	type Usage,
 } from "@earendil-works/pi-ai";
+import { attributionArgs } from "./attribution.js";
 import { resolveBin } from "./bin.js";
 import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
@@ -227,6 +228,8 @@ async function runCmdTurn(
 	const bin = resolveBin(env);
 	// On by default so print mode can run tools; CMDCODE_BRIDGE_YOLO=0 opts out.
 	if (env.CMDCODE_BRIDGE_YOLO !== "0") argv.push("--yolo");
+	// Strips cmd's injected "Co-authored-by: CommandCodeBot" commit trailer.
+	argv.push(...attributionArgs(env));
 
 	let payload: CmdPayload = { argv, prompt };
 	if (options?.onPayload) {

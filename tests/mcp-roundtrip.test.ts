@@ -86,12 +86,10 @@ test("tools present: cmd tool call yields toolCall event and stopReason: 'toolUs
 
 	const argv = seenArgv[0];
 	expect(argv).toBeDefined();
-	const modIndex = argv!.indexOf("--mod");
-	expect(modIndex).toBeGreaterThanOrEqual(0);
-	const modPath = argv![modIndex + 1]!;
-	expect(modPath.endsWith("pi-delegation-guard.ts")).toBe(true);
-	expect(existsSync(modPath)).toBe(true);
-	const modSource = readFileSync(modPath, "utf8");
+	const modPath = argv!.find((arg) => arg.endsWith("pi-delegation-guard.ts"));
+	expect(modPath).toBeDefined();
+	expect(existsSync(modPath!)).toBe(true);
+	const modSource = readFileSync(modPath!, "utf8");
 	expect(modSource).toContain("__subagent_run");
 	expect(modSource).toContain("Do not retry agent");
 
@@ -174,7 +172,7 @@ test("CMDCODE_BRIDGE_NATIVE_AGENT=allow keeps cmd's native agent tool", async ()
 
 	expect(events.some((e) => e.type === "done")).toBe(true);
 	expect(seenArgv).toHaveLength(1);
-	expect(seenArgv[0]).not.toContain("--mod");
+	expect(seenArgv[0]!.some((arg) => arg.endsWith("pi-delegation-guard.ts"))).toBe(false);
 });
 
 test("runs without subagent_run do not add the guard mod", async () => {
@@ -203,7 +201,7 @@ test("runs without subagent_run do not add the guard mod", async () => {
 
 	expect(events.some((e) => e.type === "done")).toBe(true);
 	expect(seenArgv).toHaveLength(1);
-	expect(seenArgv[0]).not.toContain("--mod");
+	expect(seenArgv[0]!.some((arg) => arg.endsWith("pi-delegation-guard.ts"))).toBe(false);
 });
 
 test("three parallel same-name calls keep their own results", async () => {
