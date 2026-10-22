@@ -82,6 +82,17 @@ pi --list-models commandcode
 pi --model commandcode/z-ai/glm-5.3-flash:high -p "Summarize this repository"
 ```
 
+Delegating to Pi from a Command Code model (needs a subagent extension that
+provides `subagent_run`, such as Gentle Shell):
+
+```bash
+pi --model commandcode/xiaomi/mimo-v2.6-pro \
+  -p "Use subagent_run to have an explorer map src/, then summarize its report"
+```
+
+The model runs inside `cmd`, but `subagent_run` executes in the Pi host, so the
+subagent shows up in Pi like any other.
+
 Model ids keep their slashes, so the full reference is
 `commandcode/<vendor>/<model>[:<thinking>]`. In Gentle AI profiles use the same
 reference, for example `commandcode/xiaomi/mimo-v2.6-pro`.
