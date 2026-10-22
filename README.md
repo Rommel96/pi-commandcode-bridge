@@ -189,6 +189,13 @@ measured on a real run, the first request drops from about 28,100 to 21,800 inpu
 tokens, and the saving repeats on every internal request of a run. Skills passed with
 `cmd --skill` still load. Set `CMDCODE_BRIDGE_CMD_SKILLS=1` to keep `cmd`'s catalog.
 
+`cmd` also runs a taste-learning request after every run (one extra model request
+that grows with the conversation). It has no per-run switch, and `cmd --config`
+saves settings globally, so the bridge leaves it alone. To turn it off yourself, set
+`"tasteLearning": false` in `~/.commandcode/config.json` (or in a project's
+`.commandcode/settings.local.json`). The `<taste_guidance>` part of `cmd`'s system
+prompt stays either way.
+
 ## How a request runs
 
 ```
