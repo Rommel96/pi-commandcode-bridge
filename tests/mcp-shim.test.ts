@@ -29,10 +29,10 @@ class ShimProc {
 	private waiters: Array<(line: string) => void> = [];
 	private buffer = "";
 
-	constructor(socketPath: string) {
+	constructor(socketPath: string, extraEnv: Record<string, string> = {}) {
 		this.proc = spawn(process.execPath, [SHIM_PATH], {
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS: toolsB64(TOOLS) },
+			env: { ...process.env, PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS: toolsB64(TOOLS), ...extraEnv },
 		});
 		this.proc.stdout!.setEncoding("utf8");
 		this.proc.stdout!.on("data", (chunk: string) => {
@@ -197,6 +197,21 @@ test("shim parks tools/call until the broker answers, then maps the result to MC
 		const result = ShimProc.ok(await pending);
 		expect(result.isError ?? false).toBe(false);
 		expect(result.content).toEqual([{ type: "text", text: "DELEGATED OK" }]);
+	} finally {
+		shim.kill();
+	}
+});
+
+test("shim forwards PICC_BRIDGE_CHILD as the child nonce of every call frame", async () => {
+	const broker = fakeBroker(sandboxDir());
+	const shim = new ShimProc(broker.socketPath, { PICC_BRIDGE_CHILD: "nonce-from-cmd-env" });
+	try {
+		const pending = shim.rpc("tools/call", { name: "subagent_run", arguments: {} });
+		await Bun.sleep(120);
+		expect(broker.calls.length).toBe(1);
+		expect(broker.calls[0]!.child).toBe("nonce-from-cmd-env");
+		broker.respond(0, { content: [{ type: "text", text: "ok" }], isError: false });
+		ShimProc.ok(await pending);
 	} finally {
 		shim.kill();
 	}

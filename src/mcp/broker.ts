@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Tool } from "@earendil-works/pi-ai";
+import { nodeRuntime } from "../launch.js";
 import { startIpcServer, toolDefs, type IpcBrokerResult, type IpcContent, type IpcServer } from "./ipc.js";
 
 /** One parked call the provider must surface to Pi as a toolCall block. */
@@ -40,6 +41,10 @@ export interface BrokerOptions {
 	onCall?: (call: BrokerCall) => void;
 	/** Shim runtime override; defaults to the current executable. */
 	runtime?: string;
+	/** Endpoint platform; defaults to `process.platform`. Injectable for tests. */
+	platform?: NodeJS.Platform;
+	/** Endpoint override (tests); defaults to `brokerEndpoint(dir, platform)`. */
+	endpoint?: string;
 }
 
 export interface Broker {
@@ -49,14 +54,12 @@ export interface Broker {
 	readonly dir: string;
 	/** The endpoint the shim connects to (unix socket file, or pipe name). */
 	readonly socketPath: string;
+	/** Per-run secret the spawned `cmd` child inherits as `PICC_BRIDGE_CHILD`. */
+	readonly childNonce: string;
+	/** Resolves once the endpoint accepts connections; rejects on a listen error. */
+	readonly ready: Promise<void>;
 	/** Command, args and env for the MCP stdio config; env points at the socket and the tools file. */
 	shimCommand(): { command: string; args: string[]; env: Record<string, string> };
-	/**
-	 * Accept calls only from shims spawned by this `cmd` child. cmd's local MCP
-	 * scope is shared per project, so a concurrent session's cmd also spawns
-	 * this broker's shim; until bound, every call is refused.
-	 */
-	bindChild(pid: number | undefined): void;
 	/** Settle one parked call. No-op for unknown ids. */
 	respond(id: string, result: IpcBrokerResult): void;
 	/** Settle every parked call as an error (abort, superseded turn, teardown). */
@@ -78,34 +81,47 @@ export function shimPath(): string {
 /**
  * Runtime for the shim subprocess. Pi's compiled binary sets `process.execPath`
  * to itself, which cannot run a script, so anything that is not a plain
- * node/bun executable falls back to `node` from PATH.
+ * node/bun executable falls back to `node` from PATH. Shared with the CLI
+ * launcher, which runs entry scripts the same way.
  */
 export function shimRuntime(
 	env: NodeJS.ProcessEnv = process.env,
 	execPath: string = process.execPath,
 ): string {
-	const override = env.CMDCODE_BRIDGE_SHIM_RUNTIME;
-	if (override) return override;
-	const base = (execPath.split(/[\\/]/).pop() ?? "").toLowerCase();
-	if (base === "node" || base === "node.exe" || base === "bun" || base === "bun.exe") return execPath;
-	return "node";
+	return nodeRuntime(env, execPath);
+}
+
+/**
+ * The broker endpoint for a platform. Windows cannot listen on AF_UNIX here
+ * (EACCES) but accepts a named pipe, so the shim gets a `\\.\pipe\` name there
+ * and a socket file inside the run's private temp directory everywhere else.
+ */
+export function brokerEndpoint(
+	dir: string,
+	platform: NodeJS.Platform,
+	id: string = randomBytes(8).toString("hex"),
+): string {
+	if (platform === "win32") return `\\\\.\\pipe\\pi-cmd-bridge-${id}`;
+	return path.join(dir, "broker.sock");
 }
 
 /** Create the broker for one run: temp dir (0700) + ipc server + shim argv. */
 export function startBroker(options: BrokerOptions): Broker {
 	const { tools, onCall } = options;
+	const platform = options.platform ?? process.platform;
 	const dir = mkdtempSync(path.join(tmpdir(), "pi-cmd-bridge-"), { mode: 0o700 });
-	const socketPath = path.join(dir, "broker.sock");
+	const socketPath = options.endpoint ?? brokerEndpoint(dir, platform);
 	/** broker call id -> ipc frame id. */
 	const ids = new Map<string, string>();
 	/** Parked calls in arrival order (id lookups included). */
 	const pending: BrokerCall[] = [];
 	/** Per-run secret the shim must send with every frame. */
 	const token = randomBytes(32).toString("base64url");
-	let childPid: number | undefined;
+	/** Per-run secret only the spawned `cmd` child inherits. */
+	const childNonce = randomBytes(24).toString("base64url");
 
 	const ipcServer: IpcServer = startIpcServer(socketPath, (call) => {
-		if (childPid === undefined || call.ppid !== childPid) {
+		if (call.child !== childNonce) {
 			return errorResult("this tool belongs to another Pi session; use the tools of your own bridge server");
 		}
 		const id = `picc-${randomBytes(6).toString("base64url")}`;
@@ -120,10 +136,16 @@ export function startBroker(options: BrokerOptions): Broker {
 		return new Promise<IpcBrokerResult>(() => {});
 	}, { token });
 
+	const ready = ipcServer.ready;
+	// Failures are surfaced by `ready` (openBroker) without becoming unhandled.
+	ready.catch(() => {});
+
 	return {
 		pending,
 		dir,
 		socketPath,
+		childNonce,
+		ready,
 		shimCommand: () => {
 			// Schemas go through a private file, not env: Linux caps each env/argv
 			// string at 128 KiB, and this config also travels as one
@@ -135,9 +157,6 @@ export function startBroker(options: BrokerOptions): Broker {
 				args: [shimPath()],
 				env: { PICC_SHIM_SOCKET: socketPath, PICC_SHIM_TOOLS_FILE: toolsFile, PICC_SHIM_TOKEN: token },
 			};
-		},
-		bindChild: (pid) => {
-			childPid = pid;
 		},
 		respond: (id, result: IpcBrokerResult) => {
 			const frameId = ids.get(id);
@@ -166,6 +185,22 @@ export function startBroker(options: BrokerOptions): Broker {
 			}
 		},
 	};
+}
+
+/**
+ * Start a broker and wait until its endpoint accepts connections. On a listen
+ * failure the broker is closed (temp dir removed) and the error is rethrown so
+ * the caller can keep the run alive without bridged tools.
+ */
+export async function openBroker(options: BrokerOptions): Promise<Broker> {
+	const broker = startBroker(options);
+	try {
+		await broker.ready;
+		return broker;
+	} catch (error) {
+		broker.close();
+		throw error;
+	}
 }
 
 export function errorResult(reason: string): IpcBrokerResult {

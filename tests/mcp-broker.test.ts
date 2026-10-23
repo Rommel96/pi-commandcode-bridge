@@ -31,7 +31,7 @@ class RawShim {
 	socket: net.Socket;
 	out: Array<Record<string, any>> = [];
 	waiters: Array<(v: Record<string, any>) => void> = [];
-	constructor(socketPath: string, private token?: string) {
+	constructor(socketPath: string, private token?: string, private child?: string) {
 		this.socket = net.connect(socketPath);
 		this.socket.setNoDelay(true);
 		let buffer = "";
@@ -52,7 +52,7 @@ class RawShim {
 	}
 	call(name: string, args: unknown, id?: string): void {
 		const frameId = id ?? `frame-${nextFrameSeq++}`;
-		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args, token: this.token, ppid: process.pid }) + "\n");
+		this.socket.write(JSON.stringify({ v: 1, id: frameId, kind: "call", name, arguments: args, token: this.token, child: this.child }) + "\n");
 	}
 	reply(msTimeout = 5000): Promise<Record<string, any> | null> {
 		return new Promise((resolve) => {
@@ -79,12 +79,15 @@ class RawShim {
 
 test("broker exposes shim spawn args with the tool definitions base64-encoded", () => {
 	const broker = startBroker({ tools: TOOLS, onCall: () => {} });
-	broker.bindChild(process.pid);
 	try {
 		const { command, args, env } = broker.shimCommand();
 		expect(command).toBe(shimRuntime());
 		expect(args).toEqual([shimPath()]);
 		expect(existsSync(shimPath())).toBe(true);
+		expect(typeof broker.childNonce).toBe("string");
+		expect(broker.childNonce.length).toBeGreaterThanOrEqual(16);
+		// The nonce belongs to the spawned cmd child only, never to the MCP config.
+		expect(env.PICC_BRIDGE_CHILD).toBeUndefined();
 		const socketPath = env.PICC_SHIM_SOCKET;
 		expect(typeof socketPath).toBe("string");
 		const decoded = JSON.parse(readFileSync(env.PICC_SHIM_TOOLS_FILE as string, "utf8"));
@@ -109,9 +112,8 @@ test("shim runtime falls back to node when process.execPath is Pi's binary", () 
 test("broker parks calls, de-mangles the MCP tool name and resolves via respond", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
-	broker.bindChild(process.pid);
 	const socketPath = broker.socketPath;
-	const shim = new RawShim(socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
+	const shim = new RawShim(socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN, broker.childNonce);
 	try {
 		await new Promise((r) => setTimeout(r, 60));
 		shim.call("mcp__pi-cmd-bridge-abc123__subagent_run", { task: "delegate this" });
@@ -142,12 +144,12 @@ test("broker parks calls, de-mangles the MCP tool name and resolves via respond"
 test("broker rejects every parked call on rejectAll", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
-	broker.bindChild(process.pid);
-	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
+	const token = broker.shimCommand().env.PICC_SHIM_TOKEN;
+	const shim = new RawShim(broker.socketPath, token, broker.childNonce);
 	try {
 		await new Promise((r) => setTimeout(r, 60));
 		shim.call("subagent_run", {});
-		const second = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
+		const second = new RawShim(broker.socketPath, token, broker.childNonce);
 		await new Promise((r) => setTimeout(r, 60));
 		second.call("subagent_run", {});
 		await new Promise((r) => setTimeout(r, 120));
@@ -171,7 +173,6 @@ test("broker rejects every parked call on rejectAll", async () => {
 test("a completed broker cannot reach out: respond is a no-op after close", async () => {
 	const seen: BrokerCall[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => seen.push(call) });
-	broker.bindChild(process.pid);
 	const socketPath = broker.socketPath;
 	await new Promise((r) => setTimeout(r, 60));
 	broker.close();
@@ -185,7 +186,7 @@ test("a completed broker cannot reach out: respond is a no-op after close", asyn
 });
 
 function shimClosed(broker: ReturnType<typeof startBroker>): void {
-	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN);
+	const shim = new RawShim(broker.socketPath, broker.shimCommand().env.PICC_SHIM_TOKEN, broker.childNonce);
 	shim.close();
 	broker.close();
 }
@@ -203,7 +204,6 @@ test("resultToMcpContent flattens tool result bodies for MCP", () => {
 
 test("respond with an unknown id is a no-op", () => {
 	const broker = startBroker({ tools: TOOLS, onCall: () => {} });
-	broker.bindChild(process.pid);
 	try {
 		expect(broker.pending).toHaveLength(0);
 		broker.respond("never-a-call", { content: [{ type: "text", text: "x" }], isError: false });

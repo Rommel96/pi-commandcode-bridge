@@ -130,12 +130,15 @@ When a model running through `pi-commandcode-bridge` is used as an orchestrator 
 4. **Cleanup**: When the conversation finishes or aborts, the MCP registration and unix socket are removed. If Pi is killed before that, the leftover registration is removed by the next run in the same project once its owning process is gone; registrations of other live Pi sessions are kept.
 
 The broker only serves its own run: every frame must carry a per-run random token,
-results go back only to the connection that made the call, and calls from a `cmd`
-process other than the run's own child are refused. That last check matters because
-`cmd`'s local MCP scope is shared by every session in the same project, so a
-concurrent session's `cmd` also starts this run's shim. Tool schemas reach the shim
-through a `0600` file in the run's private temp directory, not the environment, so
-large tool sets stay below Linux's 128 KiB per-string `execve` limit.
+results go back only to the connection that made the call, and every call must carry
+the run's random child nonce. The nonce reaches only the spawned `cmd` process, as
+`PICC_BRIDGE_CHILD` in its environment (never in the MCP registration), and `cmd`
+passes its environment to the MCP servers it starts, so the shim can prove which run
+it belongs to. That check matters because `cmd`'s local MCP scope is shared by every
+session in the same project, so a concurrent session's `cmd` also starts this run's
+shim. Tool schemas reach the shim through a `0600` file in the run's private temp
+directory, not the environment, so large tool sets stay below Linux's 128 KiB
+per-string `execve` limit.
 
 Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) continue running in-process inside `cmd` and display as thinking blocks (`[cmd tool: ...]`).
 
@@ -155,7 +158,7 @@ them by task id.
 
 | Variable | Purpose |
 | --- | --- |
-| `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows) |
+| `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows). A `.js`/`.mjs`/`.cjs` entry script, or a script with a Node shebang, is run with Node |
 | `CMDCODE_BRIDGE_YOLO=0` | Do not pass `--yolo` to `cmd` (`--yolo` is on by default, see Limits) |
 | `CMDCODE_BRIDGE_MODELS` | Comma separated globs of ids to register, e.g. `deepseek/*,z-ai/*,gpt-6-luna` (default: all) |
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
@@ -165,6 +168,7 @@ them by task id.
 | `CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` | Keep the `Co-authored-by: CommandCodeBot` commit trailer that `cmd` injects (removed by default, see Commit attribution) |
 | `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
+| `CMDCODE_BRIDGE_BROKER_ENDPOINT` | Endpoint the broker listens on, overriding the default (unix socket in a private `0700` temp dir; `\\.\pipe\pi-cmd-bridge-<id>` on Windows). Meant for troubleshooting and tests, for example to force a broker failure and check the fallback. Point it only at a path in a directory you own: the per-run token and child nonce still authenticate calls, but the endpoint no longer gets the private directory's protection |
 | `CMDCODE_BRIDGE_MCP_TIMEOUT` | Exact MCP timeout in ms for the `cmd` child (default: `1800000` / 30 min) |
 | `MCP_TOOL_TIMEOUT` | Lower values are raised to 30 min so long subagent calls survive the model turn plus the subagent execution |
 
@@ -226,8 +230,15 @@ system prompt and the transcript; later ones send only the new messages with
 - **Sessions bind in memory:** restarting Pi starts new `cmd` conversations.
 - `options.onResponse` is not called (a child process has no HTTP response); only
   `onPayload` and `onProviderStreamEvent` are honored.
-- **Windows is untested.** Plain chat is expected to work through `cmdc`; tool
-  delegation (the MCP broker) is known not to work on Windows yet.
+- **Windows is verified by user report only.** On Windows `cmdc` is an npm `.cmd`
+  shim: Node cannot spawn it without a shell, and a shell mangles JSON arguments
+  (such as the payload of `cmdc mcp add-json <name> <json>`). The bridge therefore
+  reads the shim and launches the CLI's Node entry script directly with Node — no
+  shell, so JSON arguments survive — and `CMDCODE_BRIDGE_BIN` may point at that
+  entry script (or at the `.cmd` shim). Tool delegation uses a named pipe
+  (`\\.\pipe\pi-cmd-bridge-<id>`) instead of a unix socket. If the broker cannot
+  start, the run continues without Pi tools and says why in a thinking block;
+  tool delegation end-to-end on Windows has not been confirmed by the maintainers.
 - Prompts, keys and provider payloads are never logged. The cache holds model ids,
   descriptions and effort levels only.
 

@@ -2,7 +2,7 @@
  * Broker transport: one line-JSON protocol over a unix socket (or a named pipe
  * on Windows). Each shim connection carries one call per frame:
  *
- *   shim (client)  ->  {"v":1,"id":"<nonce>","kind":"call","name":"subagent_run","arguments":{...},"token":"<session token>"}
+ *   shim (client)  ->  {"v":1,"id":"<nonce>","kind":"call","name":"subagent_run","arguments":{...},"token":"<session token>","child":"<run nonce>"}
  *   broker         ->  {"v":1,"id":"<nonce>","kind":"result","content":[...],"isError":false}
  *
  * The handler returns a Promise per call — a deferred: the broker (and later
@@ -13,7 +13,8 @@
  * When the server has a token, a frame without the exact token closes its
  * connection, and each result is written only to the connection that sent the
  * call: another local process that reaches the socket can neither inject calls
- * nor read results.
+ * nor read results. Listen failures are reported through `ready`, never thrown
+ * as an uncaught `error` event.
  */
 import net from "node:net";
 import { timingSafeEqual } from "node:crypto";
@@ -29,8 +30,8 @@ export interface IpcBrokerCall {
 	id: string;
 	name: string;
 	arguments: Record<string, unknown>;
-	/** Parent pid of the shim: the `cmd` process that spawned it. */
-	ppid?: number;
+	/** Per-run child nonce the shim inherited from the spawned `cmd` process. */
+	child?: string;
 }
 
 export interface IpcBrokerResult {
@@ -44,6 +45,8 @@ export type IpcRouteHandler = (call: IpcBrokerCall) => IpcBrokerResult | Promise
 export interface IpcServer {
 	/** The endpoint the shim was pointed at (unix socket file, or `\\.\pipe\<name>`). */
 	path: string;
+	/** Resolves once listening; rejects on the first listen error and never throws. */
+	ready: Promise<void>;
 	/** Settle one parked call out-of-band (same id the shim used). */
 	respond: (id: string, result: IpcBrokerResult) => void;
 	close: () => void;
@@ -78,6 +81,17 @@ export function startIpcServer(path: string, handler: IpcRouteHandler, options: 
 	const conns = new Set<net.Socket>();
 	const parked = new Map<string, (result: IpcBrokerResult) => void>();
 	let closed = false;
+
+	let readySettled = false;
+	let resolveReady = (): void => {};
+	let rejectReady = (_error: Error): void => {};
+	const ready = new Promise<void>((resolve, reject) => {
+		resolveReady = resolve;
+		rejectReady = reject;
+	});
+	// The exposed promise is the only channel for a listen failure; keep it from
+	// becoming an unhandled rejection when a caller ignores readiness.
+	ready.catch(() => {});
 
 	const server = net.createServer((conn) => {
 		conns.add(conn);
@@ -128,8 +142,8 @@ export function startIpcServer(path: string, handler: IpcRouteHandler, options: 
 		};
 		parked.set(id, settle);
 		try {
-			const ppid = typeof parsed.ppid === "number" ? parsed.ppid : undefined;
-			void Promise.resolve(handler({ kind: "call", v: 1, id, name, arguments: args, ppid })).then(settle, (error: unknown) => {
+			const child = typeof parsed.child === "string" ? parsed.child : undefined;
+			void Promise.resolve(handler({ kind: "call", v: 1, id, name, arguments: args, child })).then(settle, (error: unknown) => {
 				settle({
 					content: [{ type: "text", text: `bridge failure: ${String((error as Error)?.message ?? error)}` }],
 					isError: true,
@@ -151,6 +165,20 @@ export function startIpcServer(path: string, handler: IpcRouteHandler, options: 
 		);
 	}
 
+	// A listen failure (EACCES, ENOENT, EADDRINUSE...) must never surface as an
+	// uncaught `error` event: it settles `ready` instead. The persistent listener
+	// also keeps later server-level errors from escaping.
+	server.on("error", (error: Error) => {
+		if (readySettled) return;
+		readySettled = true;
+		rejectReady(error);
+	});
+	server.once("listening", () => {
+		if (readySettled) return;
+		readySettled = true;
+		resolveReady();
+	});
+
 	// A stale socket file from a crashed previous run fails listen() with EADDRINUSE; unlink first.
 	if (!isPipeEndpoint(path)) {
 		try {
@@ -159,10 +187,18 @@ export function startIpcServer(path: string, handler: IpcRouteHandler, options: 
 			/* nothing to unlink */
 		}
 	}
-	server.listen(path);
+	try {
+		server.listen(path);
+	} catch (error) {
+		if (!readySettled) {
+			readySettled = true;
+			rejectReady(error as Error);
+		}
+	}
 
 	return {
 		path,
+		ready,
 		respond: (id, result) => {
 			const settle = parked.get(id);
 			if (settle) settle(result);

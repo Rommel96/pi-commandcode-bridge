@@ -16,6 +16,11 @@
  *   --tools   base64 JSON of the advertised tool definitions
  *             [{name, description?, inputSchema?}, ...]; env PICC_SHIM_TOOLS
  *             may carry the same payload (argv wins).
+ *
+ * The bridge sets PICC_SHIM_TOKEN and PICC_BRIDGE_CHILD in this process's
+ * environment; the latter is inherited from the spawned `cmd` and forwarded as
+ * the `child` field so the broker can tell this run's cmd apart from another
+ * session's.
  */
 import net from "node:net";
 import { readFileSync } from "node:fs";
@@ -54,7 +59,8 @@ function parseArgs(argv, env) {
 	if (!Array.isArray(tools)) fail("shim: --tools must decode to a JSON array");
 	// Optional only for standalone use; the bridge always sets it.
 	const token = env.PICC_SHIM_TOKEN || undefined;
-	return { socket, tools, token };
+	const child = env.PICC_BRIDGE_CHILD || undefined;
+	return { socket, tools, token, child };
 }
 
 // ---------------------------------------------------------------------------
@@ -78,11 +84,13 @@ class RouterLink {
 	#socket = null;
 	#connecting = null;
 	#token;
+	#child;
 	#parked = new Map(); // ipc frame id -> onResult({content,isError})
 
-	constructor(endpoint, token) {
+	constructor(endpoint, token, child) {
 		this.#endpoint = endpoint;
 		this.#token = token;
+		this.#child = child;
 	}
 
 	/** Connect (or reuse). Resolves with the socket. */
@@ -158,7 +166,7 @@ class RouterLink {
 		const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 		return new Promise((resolve) => {
 			this.#parked.set(id, resolve);
-			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args, token: this.#token, ppid: process.ppid }) + "\n");
+			socket.write(JSON.stringify({ v: 1, id, kind: "call", name, arguments: args, token: this.#token, child: this.#child }) + "\n");
 		});
 	}
 
@@ -175,8 +183,8 @@ class RouterLink {
 // ---------------------------------------------------------------------------
 
 export function main(argv = process.argv.slice(2), env = process.env) {
-	const { socket, tools, token } = parseArgs(argv, env);
-	const link = new RouterLink(socket, token);
+	const { socket, tools, token, child } = parseArgs(argv, env);
+	const link = new RouterLink(socket, token, child);
 	const known = new Set(tools.map((t) => t.name));
 
 	const onRequest = (id, method, params) => {
