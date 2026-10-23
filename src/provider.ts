@@ -19,7 +19,7 @@ import { resolveBin } from "./bin.js";
 import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
 import {
-	startBroker,
+	openBroker,
 	resultToMcpContent,
 	type Broker,
 	type BrokerCall,
@@ -279,53 +279,71 @@ async function runCmdTurn(
 
 	const cwd = process.cwd();
 	let broker: Broker | undefined;
+	let spawnEnv = env;
 	let serverName = "";
 
 	if (tools.length > 0) {
 		await removeStaleBridgeServers(bin, env, cwd);
 		serverName = mcpServerName(key);
-		broker = startBroker({
-			tools,
-			onCall: (call) => {
-				const sess = activeSessions.get(key);
-				if (!sess || sess.closed) return;
-				appendToolCall(sess.stream, sess.blocks, call);
-				if (sess.toolUseTimer) clearTimeout(sess.toolUseTimer);
-				sess.toolUseTimer = setTimeout(() => {
-					sess.finalize("toolUse");
-				}, 25);
-			},
-		});
-
-		const shimCfg = broker.shimCommand();
-		const reg = await registerMcpServer(
-			bin,
-			env,
-			serverName,
-			{ transport: "stdio", command: shimCfg.command, args: shimCfg.args, env: shimCfg.env },
-			cwd,
-		);
-		if (!reg.ok) {
-			broker.close();
-			finalize("error", `cannot register bridge MCP server: ${reg.error}`);
-			return;
+		try {
+			broker = await openBroker({
+				tools,
+				endpoint: env.CMDCODE_BRIDGE_BROKER_ENDPOINT || undefined,
+				onCall: (call) => {
+					const sess = activeSessions.get(key);
+					if (!sess || sess.closed) return;
+					appendToolCall(sess.stream, sess.blocks, call);
+					if (sess.toolUseTimer) clearTimeout(sess.toolUseTimer);
+					sess.toolUseTimer = setTimeout(() => {
+						sess.finalize("toolUse");
+					}, 25);
+				},
+			});
+		} catch (error) {
+			// A broker that cannot listen must not take the host down: this run
+			// continues without bridged Pi tools and says why once.
+			appendThinking(
+				stream,
+				blocks,
+				`[bridge: Pi tools unavailable this run: ${(error as Error).message}]`,
+			);
 		}
 
-		// cmd always exposes its native `agent` tool, and it wins over the MCP
-		// subagent_run often enough to be a problem: that subagent runs inside
-		// cmd, so the Pi host never sees it. Block it with a generated mod and
-		// hand the model the exact MCP name to use instead. Users who prefer
-		// cmd's native agents can opt out with CMDCODE_BRIDGE_NATIVE_AGENT=allow.
-		if (tools.some((tool) => tool.name === "subagent_run") && env.CMDCODE_BRIDGE_NATIVE_AGENT !== "allow") {
-			try {
-				const modPath = writeSteeringMod(broker.dir, serverName);
-				payload = { ...payload, argv: [...payload.argv, "--mod", modPath] };
-			} catch (error) {
+		if (broker) {
+			const shimCfg = broker.shimCommand();
+			const reg = await registerMcpServer(
+				bin,
+				env,
+				serverName,
+				{ transport: "stdio", command: shimCfg.command, args: shimCfg.args, env: shimCfg.env },
+				cwd,
+			);
+			if (!reg.ok) {
 				broker.close();
-				void unregisterMcpServer(bin, env, serverName, cwd);
-				finalize("error", `cannot write delegation guard: ${(error as Error).message}`);
+				finalize("error", `cannot register bridge MCP server: ${reg.error}`);
 				return;
 			}
+
+			// cmd always exposes its native `agent` tool, and it wins over the MCP
+			// subagent_run often enough to be a problem: that subagent runs inside
+			// cmd, so the Pi host never sees it. Block it with a generated mod and
+			// hand the model the exact MCP name to use instead. Users who prefer
+			// cmd's native agents can opt out with CMDCODE_BRIDGE_NATIVE_AGENT=allow.
+			if (tools.some((tool) => tool.name === "subagent_run") && env.CMDCODE_BRIDGE_NATIVE_AGENT !== "allow") {
+				try {
+					const modPath = writeSteeringMod(broker.dir, serverName);
+					payload = { ...payload, argv: [...payload.argv, "--mod", modPath] };
+				} catch (error) {
+					broker.close();
+					void unregisterMcpServer(bin, env, serverName, cwd);
+					finalize("error", `cannot write delegation guard: ${(error as Error).message}`);
+					return;
+				}
+			}
+
+			// Only the spawned cmd child carries the nonce; cmd passes its env to
+			// the MCP servers it starts, so the shim can prove which run it serves.
+			spawnEnv = { ...env, PICC_BRIDGE_CHILD: broker.childNonce };
 		}
 	}
 
@@ -333,7 +351,7 @@ async function runCmdTurn(
 	try {
 		child = spawn(bin, payload.argv, {
 			cwd,
-			env,
+			env: spawnEnv,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 	} catch (error) {
@@ -346,7 +364,6 @@ async function runCmdTurn(
 	}
 
 	if (broker) {
-		broker.bindChild(child.pid);
 		const session: ActiveSession = {
 			key,
 			child,

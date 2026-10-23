@@ -130,12 +130,15 @@ When a model running through `pi-commandcode-bridge` is used as an orchestrator 
 4. **Cleanup**: When the conversation finishes or aborts, the MCP registration and unix socket are removed. If Pi is killed before that, the leftover registration is removed by the next run in the same project once its owning process is gone; registrations of other live Pi sessions are kept.
 
 The broker only serves its own run: every frame must carry a per-run random token,
-results go back only to the connection that made the call, and calls from a `cmd`
-process other than the run's own child are refused. That last check matters because
-`cmd`'s local MCP scope is shared by every session in the same project, so a
-concurrent session's `cmd` also starts this run's shim. Tool schemas reach the shim
-through a `0600` file in the run's private temp directory, not the environment, so
-large tool sets stay below Linux's 128 KiB per-string `execve` limit.
+results go back only to the connection that made the call, and every call must carry
+the run's random child nonce. The nonce reaches only the spawned `cmd` process, as
+`PICC_BRIDGE_CHILD` in its environment (never in the MCP registration), and `cmd`
+passes its environment to the MCP servers it starts, so the shim can prove which run
+it belongs to. That check matters because `cmd`'s local MCP scope is shared by every
+session in the same project, so a concurrent session's `cmd` also starts this run's
+shim. Tool schemas reach the shim through a `0600` file in the run's private temp
+directory, not the environment, so large tool sets stay below Linux's 128 KiB
+per-string `execve` limit.
 
 Native tools internal to `cmd` (`read_file`, `write_file`, `shell_command`) continue running in-process inside `cmd` and display as thinking blocks (`[cmd tool: ...]`).
 
@@ -226,8 +229,11 @@ system prompt and the transcript; later ones send only the new messages with
 - **Sessions bind in memory:** restarting Pi starts new `cmd` conversations.
 - `options.onResponse` is not called (a child process has no HTTP response); only
   `onPayload` and `onProviderStreamEvent` are honored.
-- **Windows is untested.** Plain chat is expected to work through `cmdc`; tool
-  delegation (the MCP broker) is known not to work on Windows yet.
+- **Windows is verified by user report only.** Plain chat works through `cmdc`, and
+  tool delegation uses a named pipe (`\\.\pipe\pi-cmd-bridge-<id>`) instead of a unix
+  socket. If the broker cannot start, the run continues without Pi tools and says
+  why in a thinking block; tool delegation on Windows has not been reproduced by the
+  maintainers.
 - Prompts, keys and provider payloads are never logged. The cache holds model ids,
   descriptions and effort levels only.
 

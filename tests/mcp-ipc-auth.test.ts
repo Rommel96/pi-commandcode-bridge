@@ -21,15 +21,17 @@ test("broker rejects calls without the session token and routes results only to 
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => received.push(call.name) });
 	try {
 		const token = broker.shimCommand().env.PICC_SHIM_TOKEN;
-		broker.bindChild(process.pid);
+		const child = broker.childNonce;
 		expect(typeof token).toBe("string");
 		expect(token!.length).toBeGreaterThanOrEqual(32);
+		expect(typeof child).toBe("string");
+		expect(child.length).toBeGreaterThanOrEqual(16);
 
 		const legit = await connect(broker.socketPath);
 		const intruder = await connect(broker.socketPath);
-		legit.socket.write(JSON.stringify({ v: 1, kind: "call", id: "l1", name: "read", arguments: {}, token, ppid: process.pid }) + "\n");
+		legit.socket.write(JSON.stringify({ v: 1, kind: "call", id: "l1", name: "read", arguments: {}, token, child }) + "\n");
 		intruder.socket.write(JSON.stringify({ v: 1, kind: "call", id: "e1", name: "bash", arguments: {} }) + "\n");
-		intruder.socket.write(JSON.stringify({ v: 1, kind: "call", id: "e2", name: "bash", arguments: {}, token: "guess" }) + "\n");
+		intruder.socket.write(JSON.stringify({ v: 1, kind: "call", id: "e2", name: "bash", arguments: {}, token: "guess", child }) + "\n");
 		await sleep(100);
 
 		expect(received).toEqual(["read"]);
@@ -45,20 +47,36 @@ test("broker rejects calls without the session token and routes results only to 
 	}
 });
 
-test("broker refuses calls from a cmd process other than its own child", async () => {
+test("broker refuses calls with a wrong or missing child nonce and accepts its own", async () => {
 	// Concurrent sessions share cmd's local MCP scope, so another session's cmd
-	// spawns this broker's shim too: it has the token but a different parent.
+	// spawns this broker's shim too: it has the token but not the run's nonce.
 	const received: string[] = [];
 	const broker = startBroker({ tools: TOOLS, onCall: (call) => received.push(call.name) });
 	try {
 		const token = broker.shimCommand().env.PICC_SHIM_TOKEN;
-		broker.bindChild(process.pid);
+		const child = broker.childNonce;
+
 		const foreign = await connect(broker.socketPath);
-		foreign.socket.write(JSON.stringify({ v: 1, kind: "call", id: "f1", name: "bash", arguments: {}, token, ppid: process.pid + 1 }) + "\n");
+		foreign.socket.write(JSON.stringify({ v: 1, kind: "call", id: "f1", name: "bash", arguments: {}, token, child: "another-runs-nonce" }) + "\n");
 		await sleep(100);
 		expect(received).toEqual([]);
 		expect(foreign.seen()).toContain("another Pi session");
+
+		const missing = await connect(broker.socketPath);
+		missing.socket.write(JSON.stringify({ v: 1, kind: "call", id: "m1", name: "bash", arguments: {}, token }) + "\n");
+		await sleep(100);
+		expect(received).toEqual([]);
+		expect(missing.seen()).toContain("another Pi session");
+
+		const own = await connect(broker.socketPath);
+		own.socket.write(JSON.stringify({ v: 1, kind: "call", id: "o1", name: "read", arguments: {}, token, child }) + "\n");
+		await sleep(100);
+		expect(received).toEqual(["read"]);
+		expect(broker.pending).toHaveLength(1);
+
 		foreign.socket.destroy();
+		missing.socket.destroy();
+		own.socket.destroy();
 	} finally {
 		broker.close();
 	}
