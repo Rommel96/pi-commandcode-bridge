@@ -161,6 +161,8 @@ them by task id.
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
 | `CMDCODE_BRIDGE_CACHE` | Cache file path |
 | `CMDCODE_BRIDGE_CACHE_TTL_HOURS` | Cache lifetime (default 24) |
+| `CMDCODE_BRIDGE_CMD_SKILLS=1` | Let `cmd` discover and list its own skills (skipped by default with `--no-skills`, see Repeated context) |
+| `CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` | Keep the `Co-authored-by: CommandCodeBot` commit trailer that `cmd` injects (removed by default, see Commit attribution) |
 | `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
 | `CMDCODE_BRIDGE_MCP_TIMEOUT` | Exact MCP timeout in ms for the `cmd` child (default: `1800000` / 30 min) |
@@ -169,11 +171,36 @@ them by task id.
 `CMD_HERDR=0` is always set for the child, so `cmd`'s built-in Herdr reporting
 cannot replace the agent that Herdr tracks for the Pi pane.
 
+### Commit attribution
+
+`cmd`'s system prompt tells the model to end every git commit message with
+`Co-authored-by: CommandCodeBot <noreply@commandcode.ai>`. `cmd` only turns that off
+through `"attribution": { "commit": "" }` in a settings file; `--config` rejects the
+key, so a provider cannot set it per run. The bridge loads a small `cmd` mod (`--mod`) on every run that
+removes exactly that trailer from tool inputs before the tool executes. Other
+`Co-authored-by` trailers are never touched. Set
+`CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` to leave the trailer in place.
+
+### Repeated context
+
+Pi already sends its own system prompt, skills included, to `cmd`. On top of that
+`cmd` adds a catalog of the skills it discovers, so the bridge passes `--no-skills`:
+measured on a real run, the first request drops from about 28,100 to 21,800 input
+tokens, and the saving repeats on every internal request of a run. Skills passed with
+`cmd --skill` still load. Set `CMDCODE_BRIDGE_CMD_SKILLS=1` to keep `cmd`'s catalog.
+
+`cmd` also runs a taste-learning request after every run (one extra model request
+that grows with the conversation). It has no per-run switch, and `cmd --config`
+saves settings globally, so the bridge leaves it alone. To turn it off yourself, set
+`"tasteLearning": false` in `~/.commandcode/config.json` (or in a project's
+`.commandcode/settings.local.json`). The `<taste_guidance>` part of `cmd`'s system
+prompt stays either way.
+
 ## How a request runs
 
 ```
 cmd -p --output-format json --skip-onboarding --trust -m <model> \
-    [--effort <level>] [--resume <session>] [--yolo]      (prompt on stdin)
+    [--effort <level>] [--resume <session>] [--yolo] [--mod <attribution>] [--no-skills]      (prompt on stdin)
 ```
 
 `cmd`'s NDJSON stream becomes Pi events: text deltas become text; native `cmd`
