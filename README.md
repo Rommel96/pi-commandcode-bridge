@@ -158,7 +158,7 @@ them by task id.
 
 | Variable | Purpose |
 | --- | --- |
-| `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows) |
+| `CMDCODE_BRIDGE_BIN` | Path of the CLI (default `cmd`, `cmdc` on Windows). A `.js`/`.mjs`/`.cjs` entry script, or a script with a Node shebang, is run with Node |
 | `CMDCODE_BRIDGE_YOLO=0` | Do not pass `--yolo` to `cmd` (`--yolo` is on by default, see Limits) |
 | `CMDCODE_BRIDGE_MODELS` | Comma separated globs of ids to register, e.g. `deepseek/*,z-ai/*,gpt-6-luna` (default: all) |
 | `CMDCODE_BRIDGE_REFRESH=1` | Rediscover now instead of using the cache |
@@ -230,11 +230,15 @@ system prompt and the transcript; later ones send only the new messages with
 - **Sessions bind in memory:** restarting Pi starts new `cmd` conversations.
 - `options.onResponse` is not called (a child process has no HTTP response); only
   `onPayload` and `onProviderStreamEvent` are honored.
-- **Windows is verified by user report only.** Plain chat works through `cmdc`, and
-  tool delegation uses a named pipe (`\\.\pipe\pi-cmd-bridge-<id>`) instead of a unix
-  socket. If the broker cannot start, the run continues without Pi tools and says
-  why in a thinking block; tool delegation on Windows has not been reproduced by the
-  maintainers.
+- **Windows is verified by user report only.** On Windows `cmdc` is an npm `.cmd`
+  shim: Node cannot spawn it without a shell, and a shell mangles JSON arguments
+  (such as the payload of `cmdc mcp add-json <name> <json>`). The bridge therefore
+  reads the shim and launches the CLI's Node entry script directly with Node — no
+  shell, so JSON arguments survive — and `CMDCODE_BRIDGE_BIN` may point at that
+  entry script (or at the `.cmd` shim). Tool delegation uses a named pipe
+  (`\\.\pipe\pi-cmd-bridge-<id>`) instead of a unix socket. If the broker cannot
+  start, the run continues without Pi tools and says why in a thinking block;
+  tool delegation end-to-end on Windows has not been confirmed by the maintainers.
 - Prompts, keys and provider payloads are never logged. The cache holds model ids,
   descriptions and effort levels only.
 

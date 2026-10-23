@@ -12,6 +12,7 @@
  */
 import { spawn as spawnChild } from "node:child_process";
 import { createHash } from "node:crypto";
+import { resolveLaunch } from "../launch.js";
 
 /** Config name prefix for every bridge-registered MCP server. */
 export const MCP_NAME_PREFIX = "pi-cmd-bridge-";
@@ -32,7 +33,12 @@ function runCli(bin: string, args: string[], env: NodeJS.ProcessEnv, cwd: string
 	return new Promise((resolve) => {
 		let child;
 		try {
-			child = spawnChild(bin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+			const launch = resolveLaunch(bin, env);
+			child = spawnChild(launch.command, [...launch.args, ...args], {
+				cwd,
+				env,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
 		} catch (error) {
 			resolve({ code: null, output: String((error as Error).message) });
 			return;

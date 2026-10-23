@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { attributionArgs } from "./attribution.js";
 import { resolveBin } from "./bin.js";
+import { resolveLaunch } from "./launch.js";
 import { specFor, toCmdEffort } from "./models.js";
 import { buildDeltaPrompt, buildInitialPrompt, messageText } from "./prompt.js";
 import {
@@ -350,7 +351,8 @@ async function runCmdTurn(
 
 	let child;
 	try {
-		child = spawn(bin, payload.argv, {
+		const launch = resolveLaunch(bin, spawnEnv);
+		child = spawn(launch.command, [...launch.args, ...payload.argv], {
 			cwd,
 			env: spawnEnv,
 			stdio: ["pipe", "pipe", "pipe"],

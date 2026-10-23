@@ -13,6 +13,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { resolveBin } from "./bin.js";
+import { resolveLaunch } from "./launch.js";
 import { FALLBACK_MODELS, type CmdEffort, type CmdModelSpec } from "./models.js";
 
 /** One model of the live `cmd` catalog. `efforts: null` means the probe was inconclusive. */
@@ -163,7 +164,12 @@ function run(bin: string, args: string[], options: RunOptions): Promise<RunResul
 	return new Promise((resolve) => {
 		let child;
 		try {
-			child = spawn(bin, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+			const launch = resolveLaunch(bin, options.env);
+			child = spawn(launch.command, [...launch.args, ...args], {
+				cwd: options.cwd,
+				env: options.env,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
 		} catch (error) {
 			resolve({ code: null, output: "", error: error as Error });
 			return;

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Tool } from "@earendil-works/pi-ai";
+import { nodeRuntime } from "../launch.js";
 import { startIpcServer, toolDefs, type IpcBrokerResult, type IpcContent, type IpcServer } from "./ipc.js";
 
 /** One parked call the provider must surface to Pi as a toolCall block. */
@@ -80,17 +81,14 @@ export function shimPath(): string {
 /**
  * Runtime for the shim subprocess. Pi's compiled binary sets `process.execPath`
  * to itself, which cannot run a script, so anything that is not a plain
- * node/bun executable falls back to `node` from PATH.
+ * node/bun executable falls back to `node` from PATH. Shared with the CLI
+ * launcher, which runs entry scripts the same way.
  */
 export function shimRuntime(
 	env: NodeJS.ProcessEnv = process.env,
 	execPath: string = process.execPath,
 ): string {
-	const override = env.CMDCODE_BRIDGE_SHIM_RUNTIME;
-	if (override) return override;
-	const base = (execPath.split(/[\\/]/).pop() ?? "").toLowerCase();
-	if (base === "node" || base === "node.exe" || base === "bun" || base === "bun.exe") return execPath;
-	return "node";
+	return nodeRuntime(env, execPath);
 }
 
 /**
