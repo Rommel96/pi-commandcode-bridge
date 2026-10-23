@@ -168,6 +168,7 @@ them by task id.
 | `CMDCODE_BRIDGE_COMMIT_ATTRIBUTION=keep` | Keep the `Co-authored-by: CommandCodeBot` commit trailer that `cmd` injects (removed by default, see Commit attribution) |
 | `CMDCODE_BRIDGE_NATIVE_AGENT=allow` | Keep `cmd`'s built-in `agent` tool instead of redirecting delegation to Pi's `subagent_run` |
 | `CMDCODE_BRIDGE_SHIM_RUNTIME` | Node-compatible runtime used to spawn the MCP shim (default `node`) |
+| `CMDCODE_BRIDGE_BROKER_ENDPOINT` | Endpoint the broker listens on, overriding the default (unix socket in a private `0700` temp dir; `\\.\pipe\pi-cmd-bridge-<id>` on Windows). Meant for troubleshooting and tests, for example to force a broker failure and check the fallback. Point it only at a path in a directory you own: the per-run token and child nonce still authenticate calls, but the endpoint no longer gets the private directory's protection |
 | `CMDCODE_BRIDGE_MCP_TIMEOUT` | Exact MCP timeout in ms for the `cmd` child (default: `1800000` / 30 min) |
 | `MCP_TOOL_TIMEOUT` | Lower values are raised to 30 min so long subagent calls survive the model turn plus the subagent execution |
 

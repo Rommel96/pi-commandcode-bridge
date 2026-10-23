@@ -288,6 +288,7 @@ async function runCmdTurn(
 		try {
 			broker = await openBroker({
 				tools,
+				// Documented override for troubleshooting and tests (README, Configuration).
 				endpoint: env.CMDCODE_BRIDGE_BROKER_ENDPOINT || undefined,
 				onCall: (call) => {
 					const sess = activeSessions.get(key);
